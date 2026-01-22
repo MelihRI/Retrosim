@@ -1,0 +1,1 @@
+# SmartCAPEX AI GUI Package

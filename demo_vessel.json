@@ -1,0 +1,41 @@
+{
+    "vessel_id": "TR-KOST-2024-001",
+    "vessel_name": "M/V Karadeniz Koster",
+    "technical_specs": {
+        "dwt": 5200,
+        "age": 16,
+        "length": 105.5,
+        "breadth": 16.8,
+        "draft": 6.8,
+        "vessel_type": "Koster"
+    },
+    "operational_params": {
+        "speed": 11.5,
+        "fuel_consumption": 17.2,
+        "co2_emission": 53.3,
+        "cii_score": 4.3,
+        "eedi_score": 19.5,
+        "engine_efficiency": 0.41
+    },
+    "financials": {
+        "purchase_price": 4200000,
+        "purchase_date": "2008-03-15",
+        "current_value": 1150000,
+        "annual_opex": 680000
+    },
+    "compliance": {
+        "psc_deficiencies": 4,
+        "cii_rating": "D",
+        "class_status": "conditional",
+        "last_psc_date": "2024-01-10"
+    },
+    "environmental_factors": {
+        "wave_regional_factor": 1.1,
+        "wind_regional_factor": 1.15,
+        "operating_region": "Black Sea"
+    },
+    "market_data": {
+        "charter_rate": 8500,
+        "utilization_rate": 0.78
+    }
+}
