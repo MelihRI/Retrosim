@@ -432,6 +432,19 @@ class MultiObjectiveOptimizer:
             'class_downgrade': 200000,
             'insurance_increase': 0.15
         }
+        
+        # --- Retrofit Component Database ---
+        self.retrofit_components = {
+            'propeller_high_eff': {'name': 'High-Efficiency Propeller', 'capex': 250000, 'saving': 0.04},
+            'pbcf': {'name': 'PBCF (Propeller Boss Cap Fin)', 'capex': 60000, 'saving': 0.015},
+            'bulbous_bow': {'name': 'Optimized Bulbous Bow', 'capex': 180000, 'saving': 0.035},
+            'shaft_generator': {'name': 'Shaft Generator System', 'capex': 350000, 'saving': 0.05},
+            'engine_derating': {'name': 'Engine De-rating / Tuning', 'capex': 120000, 'saving': 0.025},
+            'hull_coating': {'name': 'Premium Anti-fouling Coating', 'capex': 80000, 'saving': 0.03},
+            'flettner_rotor': {'name': 'Flettner Rotor (Wind)', 'capex': 850000, 'saving': 0.12}
+        }
+        
+        self.current_vessel_data = None # Store latest vessel data for reporting/viz
     
     def create_base_scenarios(self, vessel_data: Dict):
         """
@@ -477,19 +490,35 @@ class MultiObjectiveOptimizer:
             risk_factor=min(age / 25, 0.9)
         )
         
-        # Scenario 2: Retrofit (25% improvement)
-        retrofit_reduction = 0.25
+        # Scenario 2: Smart Retrofit (Calculated based on components)
+        selected_components = vessel_data.get('selected_retrofit', [])
+        total_capex = 0
+        total_saving = 0
+        
+        if not selected_components:
+            # Default fallback if no specific components selected
+            retrofit_reduction = 0.20
+            total_capex = dwt * 150
+        else:
+            for comp_id in selected_components:
+                if comp_id in self.retrofit_components:
+                    comp = self.retrofit_components[comp_id]
+                    total_capex += comp['capex']
+                    # Savings are multiplicative: (1-s1)*(1-s2)...
+                    total_saving = 1 - (1 - total_saving) * (1 - comp['saving'])
+            retrofit_reduction = total_saving
+
         self.scenarios['retrofit'] = RetrofitScenario(
-            name="Retrofit Solution",
-            capex=dwt * 150,
+            name="Smart Retrofit",
+            capex=total_capex,
             opex=700000,
             fuel_consumption=current_fuel * (1 - retrofit_reduction),
             co2_emission=current_co2 * (1 - retrofit_reduction),
             cii_score=current_cii * (1 - retrofit_reduction),
             eedi_score=current_eedi * (1 - retrofit_reduction * 0.7),
             lifespan=20,
-            retrofit_time=6,
-            risk_factor=0.3
+            retrofit_time=max(2, len(selected_components) * 1.5), # approx 1.5 months per major part
+            risk_factor=0.25
         )
         
         # Scenario 3: New Build (45% improvement)
@@ -508,28 +537,58 @@ class MultiObjectiveOptimizer:
         )
     
     def calculate_npv(self, scenario: RetrofitScenario, 
-                     analysis_period: int = 15) -> float:
+                      vessel_data: Dict,
+                      analysis_period: int = 15) -> float:
         """
-        ÖĞRENİM: Net Present Value calculation
+        ÖĞRENİM: Net Present Value calculation - CLIMATE AWARE VERSION
         
         NPV = -CAPEX + Σ(Cash Flow_t / (1 + r)^t) + Residual Value
         
-        Integration with Investment Strategist Agent
+        This version integrates ClimateGuardian to update fuel consumption 
+        each year based on projected sea state deterioration.
         """
+        from agents.climate_guardian import ClimateGuardian
+        guardian = ClimateGuardian()
+        
         npv = -scenario.capex
         
-        for year in range(analysis_period):
-            # Annual costs
-            annual_fuel_cost = scenario.fuel_consumption * 365 * self.fuel_price
-            annual_carbon_cost = scenario.co2_emission * 365 * self.carbon_tax
-            annual_opex = scenario.opex * (1 + self.inflation_rate) ** year
+        start_year = 2025
+        
+        for i in range(analysis_period):
+            year = start_year + i
             
-            # Penalties (Regulation Manager integration)
+            # 1. Get Climate and Regulatory Projections for this year
+            env_impact = guardian.project_vessel_performance_impact(
+                vessel_data={'fuel_consumption': scenario.fuel_consumption, 
+                             'speed': 12, 'cii_score': scenario.cii_score},
+                target_year=year
+            )
+            
+            # Apply resistance penalty to fuel consumption for this specific year
+            resistance_factor = env_impact.get('resistance_penalty', 1.0)
+            yearly_fuel_consumption = scenario.fuel_consumption * resistance_factor
+            
+            # 2. Get Regulatory Projections (Carbon Tax etc.)
+            regulations = guardian.project_regulatory_changes(year)
+            carbon_tax_rate = regulations['carbon_tax']['rate']
+            cii_limit = regulations['cii_regulation']['limit']
+            
+            # 3. Calculate Annual costs
+            annual_fuel_cost = yearly_fuel_consumption * 365 * self.fuel_price
+            annual_carbon_cost = scenario.co2_emission * 365 * carbon_tax_rate
+            annual_opex = scenario.opex * (1 + self.inflation_rate) ** i
+            
+            # 4. Calculate Penalties (Increased risk over time)
             penalty_cost = 0
-            if scenario.cii_score > self.cii_threshold:
-                penalty_cost += self.turkish_penalties['environmental_fine']
-            if scenario.risk_factor > 0.7:
-                penalty_cost += self.turkish_penalties['psc_detention'] * 0.3
+            # Higher penalties if CII limit is exceeded
+            if scenario.cii_score > cii_limit:
+                severity = (scenario.cii_score - cii_limit) / cii_limit
+                penalty_cost += self.turkish_penalties['environmental_fine'] * (1 + severity)
+            
+            # Increasing PSC risk with ship age
+            ship_age_in_year = vessel_data.get('age', 10) + i
+            if ship_age_in_year > 20: 
+                penalty_cost += self.turkish_penalties['psc_detention'] * 0.5
             
             # Total annual cost (negative cash flow)
             total_annual_cost = (
@@ -538,7 +597,7 @@ class MultiObjectiveOptimizer:
             )
             
             # Discount to present value
-            pv_cost = total_annual_cost / (1 + self.discount_rate) ** year
+            pv_cost = total_annual_cost / (1 + self.discount_rate) ** i
             npv -= pv_cost
         
         # Residual value
@@ -579,7 +638,25 @@ class MultiObjectiveOptimizer:
         operational_score = fuel_component + risk_component + availability_component
         return min(100, max(0, operational_score))
     
-    def topsis_decision(self, weights: Dict[str, float] = None) -> Dict:
+    def optimize_scenarios(self, vessel_data: Dict) -> Dict:
+        """
+        Create base scenarios and calculate KPIs to match frontend output format.
+        """
+        self.create_base_scenarios(vessel_data)
+        alternatives = {}
+        for name, scenario in self.scenarios.items():
+            npv = self.calculate_npv(scenario, vessel_data=vessel_data)
+            env_score = self.calculate_environmental_score(scenario)
+            ops_score = self.calculate_operational_score(scenario)
+            
+            alternatives[name] = {
+                'npv': npv,
+                'environmental_score': env_score,
+                'operational_score': ops_score
+            }
+        return alternatives
+
+    def topsis_decision(self, vessel_data: Dict, weights: Dict[str, float] = None) -> Dict:
         """
         ÖĞRENİM: TOPSIS-based decision making
         
@@ -595,7 +672,7 @@ class MultiObjectiveOptimizer:
         # Prepare alternatives dictionary for TOPSIS
         alternatives = {}
         for name, scenario in self.scenarios.items():
-            npv = self.calculate_npv(scenario)
+            npv = self.calculate_npv(scenario, vessel_data=vessel_data)
             env_score = self.calculate_environmental_score(scenario)
             ops_score = self.calculate_operational_score(scenario)
             
@@ -675,7 +752,7 @@ class MultiObjectiveOptimizer:
             self.create_base_scenarios(modified_vessel)
             
             # Calculate objectives
-            npv = self.calculate_npv(self.scenarios['retrofit'])
+            npv = self.calculate_npv(self.scenarios['retrofit'], vessel_data=modified_vessel)
             env_score = self.calculate_environmental_score(
                 self.scenarios['retrofit']
             )
@@ -712,6 +789,7 @@ class MultiObjectiveOptimizer:
         }
     
     def sensitivity_analysis_extended(self, 
+                                     vessel_data: Dict,
                                      parameter_ranges: Dict = None) -> Dict:
         """
         ÖĞRENİM: Extended sensitivity analysis
@@ -740,7 +818,7 @@ class MultiObjectiveOptimizer:
                 # Recalculate NPV for all scenarios
                 sensitivity_results[param_name][value] = {}
                 for scenario_name, scenario in self.scenarios.items():
-                    npv = self.calculate_npv(scenario)
+                    npv = self.calculate_npv(scenario, vessel_data=vessel_data)
                     sensitivity_results[param_name][value][scenario_name] = npv
             
             # Restore original value
@@ -758,6 +836,7 @@ class MultiObjectiveOptimizer:
         Performs comprehensive multi-objective analysis
         """
         try:
+            self.current_vessel_data = vessel_data
             # Create scenarios
             print("DEBUG: Creating base scenarios...")
             self.create_base_scenarios(vessel_data)
@@ -769,7 +848,7 @@ class MultiObjectiveOptimizer:
                 print(f"DEBUG: Evaluating scenario '{name}'...")
                 results[name] = {
                     'scenario': scenario,
-                    'npv': self.calculate_npv(scenario),
+                    'npv': self.calculate_npv(scenario, vessel_data=vessel_data),
                     'environmental_score': self.calculate_environmental_score(scenario),
                     'operational_score': self.calculate_operational_score(scenario)
                 }
@@ -781,7 +860,7 @@ class MultiObjectiveOptimizer:
             if use_topsis:
                 print("DEBUG: Running TOPSIS decision...")
                 try:
-                    topsis_results = self.topsis_decision()
+                    topsis_results = self.topsis_decision(vessel_data=vessel_data)
                     print(f"DEBUG: TOPSIS completed. Ranking: {topsis_results['ranking']}")
                     for name in results:
                         results[name]['topsis_score'] = topsis_results['scores'][name]
@@ -807,7 +886,7 @@ class MultiObjectiveOptimizer:
             # Sensitivity analysis
             if sensitivity_analysis:
                 print("DEBUG: Running sensitivity analysis...")
-                results['sensitivity'] = self.sensitivity_analysis_extended()
+                results['sensitivity'] = self.sensitivity_analysis_extended(vessel_data=vessel_data)
             
             print("DEBUG: Optimization complete!")
             return results
@@ -873,21 +952,24 @@ class MultiObjectiveOptimizer:
         
         return self.pareto_front
     
-    def generate_comprehensive_report(self) -> Dict:
+    def generate_comprehensive_report(self, vessel_data: Dict = None) -> Dict:
         """
         ÖĞRENİM: Comprehensive reporting
         
         Generates detailed analysis report with all metrics and recommendations
         """
+        if vessel_data is None:
+            vessel_data = self.current_vessel_data
+            
         # TOPSIS results
-        topsis_results = self.topsis_decision()
+        topsis_results = self.topsis_decision(vessel_data=vessel_data)
         
         # Calculate all metrics for scenarios
         detailed_results = {}
         for name, scenario in self.scenarios.items():
             detailed_results[name] = {
                 'scenario': scenario,
-                'npv': self.calculate_npv(scenario),
+                'npv': self.calculate_npv(scenario, vessel_data=vessel_data),
                 'environmental_score': self.calculate_environmental_score(scenario),
                 'operational_score': self.calculate_operational_score(scenario),
                 'topsis_score': topsis_results['scores'][name]
@@ -905,7 +987,7 @@ class MultiObjectiveOptimizer:
             'recommendations': self._generate_recommendations(
                 best_scenario, detailed_results
             ),
-            'sensitivity': self.sensitivity_analysis_extended()
+            'sensitivity': self.sensitivity_analysis_extended(vessel_data=vessel_data)
         }
         
         return report
@@ -1043,7 +1125,7 @@ class MultiObjectiveOptimizer:
         
         # Subplot 4: TOPSIS Ranking
         if 'topsis_ranking' in self.optimization_results:
-            topsis_results = self.topsis_decision()
+            topsis_results = self.topsis_decision(vessel_data=self.current_vessel_data)
             topsis_scores = [topsis_results['scores'][name] for name in scenario_names]
             
             axes[1, 1].barh(scenario_names, topsis_scores, color=colors, alpha=0.8)
@@ -1076,12 +1158,13 @@ class MultiObjectiveOptimizer:
             return
         
         # Prepare export data
+        t_results = self.topsis_decision(vessel_data=self.current_vessel_data)
         export_data = {
             'scenarios': {},
-            'topsis_ranking': self.topsis_decision()['ranking'],
+            'topsis_ranking': t_results['ranking'],
             'pareto_front': self.pareto_front,
             'recommendations': self._generate_recommendations(
-                self.topsis_decision()['ranking'][0],
+                t_results['ranking'][0],
                 {name: {'scenario': self.scenarios[name], 
                        'npv': self.optimization_results[name]['npv'],
                        'environmental_score': self.optimization_results[name]['environmental_score'],
@@ -1106,7 +1189,7 @@ class MultiObjectiveOptimizer:
                 'npv': result['npv'],
                 'environmental_score': result['environmental_score'],
                 'operational_score': result['operational_score'],
-                'topsis_score': self.topsis_decision()['scores'][name]
+                'topsis_score': t_results['scores'][name]
             }
         
         with open(filepath, 'w', encoding='utf-8') as f:

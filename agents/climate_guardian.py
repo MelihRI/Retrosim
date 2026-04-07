@@ -42,6 +42,7 @@ class ClimateGuardian:
         self.cii_tightening_rate = 0.03  # 3% annual tightening
         self.carbon_tax_increase_rate = 0.05  # 5% annual increase
         self.emission_standards_tightening = 0.04  # 4% annual tightening
+        self.base_carbon_tax = 100  # USD per ton CO2 (2025)
         
         # Environmental factor projections
         self.environmental_projections = {}
@@ -156,7 +157,7 @@ class ClimateGuardian:
         Returns:
             Dictionary with projected regulatory framework
         """
-        base_carbon_tax = 100      # USD per ton CO2 (2025)
+        base_carbon_tax = getattr(self, 'base_carbon_tax', 100)
         base_cii_limit = 3.5       # CII rating limit (2025)
         base_eedi_limit = 15       # EEDI limit (2025)
         base_sox_fee = 50          # USD per ton SOx

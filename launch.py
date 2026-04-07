@@ -31,14 +31,13 @@ def main():
     
     # Check required libraries
     required_libs = [
-        ('tkinter', 'tkinter'),
+        ('PyQt6', 'PyQt6'),
         ('numpy', 'numpy'),
         ('pandas', 'pandas'),
         ('matplotlib', 'matplotlib'),
         ('scikit-learn', 'sklearn'),
         ('scipy', 'scipy'),
-        ('tensorflow', 'tensorflow'),
-        ('deap', 'deap')
+        ('torch', 'torch')
     ]
     
     missing_libs = []
@@ -69,7 +68,7 @@ def main():
     
     try:
         # Import and launch main application
-        from main import main as app_main
+        from main_gui import main_gui as app_main
         app_main()
     except KeyboardInterrupt:
         print("\n👋 Application terminated by user")

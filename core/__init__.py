@@ -1,0 +1,1 @@
+# SmartCAPEX AI - Core Module
