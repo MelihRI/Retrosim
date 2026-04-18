@@ -208,7 +208,7 @@ This software is provided for educational and research purposes. Commercial use 
 If using this software in research, please cite:
 
 ```
-SmartCAPEX AI: Intelligent Multi-Agent Architecture for Maritime Retrofit Decisions
+Retrosim: Intelligent Multi-Agent Architecture for Maritime Retrofit Decisions
 Based on AI-Based Decision Support Systems methodology (Bocaneala et al.)
 Literature: Surrogate Modeling (Westermann et al., 2020), 
             Emotional ANN (Aljahdali et al., 2025),
@@ -217,5 +217,5 @@ Literature: Surrogate Modeling (Westermann et al., 2020),
 
 ---
 
-**SmartCAPEX AI v1.0** - Intelligent Maritime Retrofit Decision Support
-© 2025 SmartCAPEX AI Development Team
+**Retrosim v1.0** - Intelligent Maritime Retrofit Decision Support
+© 2025 Retrosim Development Team
