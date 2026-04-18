@@ -1,15 +1,14 @@
-# SmartCAPEX AI - Maritime Retrofit Decision Support
+# Retrosim - Maritime Retrofit Decision Support
 
 ## Overview
 
-SmartCAPEX AI is an intelligent multi-agent desktop application for maritime retrofit decision support. The system uses a hierarchical agent architecture based on AI-Based Decision Support Systems methodology (Bocaneala et al.) to analyze retrofit options for aging koster vessels.
+Retrosim is an intelligent multi-agent desktop application for maritime retrofit decision support. The system uses a hierarchical agent architecture based on AI-Based Decision Support Systems methodology (Bocaneala et al.) to analyze retrofit options for aging koster vessels.
 
 ## Architecture
 
 The system consists of four specialized agents:
 
-### 1. Surrogate Modeler (EANN Core)
-- **Technology**: Emotional Artificial Neural Network (EANN)
+### 1. Surrogate Modeler
 - **Purpose**: Physics-informed surrogate modeling for vessel performance prediction
 - **Features**:
   - Digital twin creation
