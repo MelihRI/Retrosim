@@ -635,7 +635,7 @@ class SurrogateModeler(QObject):
                     epoch_loss += loss.item() * xb.size(0)
                 epoch_loss /= len(train_ds)
 
-                model.eval()
+                model.train(False)
                 val_loss = 0.0
                 with torch.no_grad():
                     for xb, yb in val_loader:
@@ -661,7 +661,7 @@ class SurrogateModeler(QObject):
 
             self._save_eann_model(model)
 
-            model.eval()
+            model.train(False)
             X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to(DEVICE)
             y_test_t = torch.tensor(y_test_s, dtype=torch.float32).to(DEVICE)
             with torch.no_grad():
@@ -724,7 +724,7 @@ class SurrogateModeler(QObject):
                 env_indices=ckpt['env_indices']
             ).to(DEVICE)
             model.load_state_dict(ckpt['model_state_dict'])
-            model.eval()
+            model.train(False)
             print(f"[OK] EANN model yüklendi: {path}")
             return model
         except Exception as e:
@@ -776,7 +776,7 @@ class SurrogateModeler(QObject):
             y_pred_s = self.models['gbr'].predict(X_scaled)
         elif ('eann' in primary or 'EANN' in model_type) and 'eann' in self.models:
             model = self.models['eann']
-            model.eval()
+            model.train(False)
             X_t = torch.tensor(X_scaled, dtype=torch.float32).to(DEVICE)
             with torch.no_grad():
                 y_pred_s = model(X_t).cpu().numpy()

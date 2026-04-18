@@ -285,7 +285,7 @@ class PINNCFDAgent(QObject):
                         self.model = TwoPhasePINN(nl, nn_).to(DEVICE)
                         print(f"✅ İki fazlı PINN modeli yüklendi: {path}")
                     self.model.load_state_dict(ckpt['model_state_dict'])
-                    self.model.eval()
+                    self.model.train(False)
                     self.is_trained = True
                     return
                 except Exception as e:
@@ -479,7 +479,7 @@ class PINNCFDAgent(QObject):
             dtype=torch.float32, device=DEVICE
         )
 
-        self.model.eval()
+        self.model.train(False)
         with torch.no_grad():
             outputs = self.model(inputs).cpu().numpy()
 

@@ -832,7 +832,7 @@ class ModulusCFDAgent(QObject):
             scheduler.step()
 
             # ── Validate ──
-            self.model.eval()
+            self.model.train(False)
             val_loss = 0.0
             with torch.no_grad():
                 for pc_batch, cond_batch, scalar_batch in val_loader:
@@ -876,7 +876,7 @@ class ModulusCFDAgent(QObject):
 
         self.is_trained = True
         self._save_checkpoint()
-        self.model.eval()
+        self.model.train(False)
         print(f"[OK] GC-FNO Training done! Best val loss: {best_val_loss:.6f}")
 
     def _generate_synthetic_dataset(self, n_samples: int = 500) -> Dict:
@@ -994,7 +994,7 @@ class ModulusCFDAgent(QObject):
         pc_tensor = pc_tensor.to(DEVICE)
         cond_tensor = cond_tensor.to(DEVICE)
 
-        self.model.eval()
+        self.model.train(False)
         with torch.no_grad():
             scalars_pred, fields_pred = self.model(pc_tensor, cond_tensor)
 
@@ -1178,7 +1178,7 @@ class ModulusCFDAgent(QObject):
         pc_tensor = pc_tensor.to(DEVICE)
         cond_tensor = cond_tensor.to(DEVICE)
 
-        self.model.eval()
+        self.model.train(False)
         with torch.no_grad():
             scalars = self.model.predict_scalars_only(pc_tensor, cond_tensor)
 

@@ -725,7 +725,7 @@ class PointNetAgent(QObject):
             try:
                 ckpt = torch.load(pth_path, map_location=DEVICE, weights_only=False)
                 self.model.load_state_dict(ckpt['model_state_dict'])
-                self.model.eval()
+                self.model.train(False)
                 self.is_trained = True
                 print(f"[OK] PointNet++ loaded: {pth_path}")
             except Exception as e:
@@ -754,7 +754,7 @@ class PointNetAgent(QObject):
         pc = self.preprocessor.stl_to_point_cloud(stl_path)
         pc_tensor = torch.tensor(pc, dtype=torch.float32).unsqueeze(0).to(DEVICE)
 
-        self.model.eval()
+        self.model.train(False)
         with torch.no_grad():
             pred = self.model(pc_tensor)  # (1, 3)
 
@@ -783,7 +783,7 @@ class PointNetAgent(QObject):
         pc = self.preprocessor._normalise(point_cloud.copy())
         pc_tensor = torch.tensor(pc, dtype=torch.float32).unsqueeze(0).to(DEVICE)
 
-        self.model.eval()
+        self.model.train(False)
         with torch.no_grad():
             pred = self.model(pc_tensor)
 
@@ -856,7 +856,7 @@ class PointNetAgent(QObject):
 
         self.is_trained = True
         self._save_model()
-        self.model.eval()
+        self.model.train(False)
         self.progress_signal.emit(100, f"[OK] PointNet++ eğitim tamamlandı! Loss: {best_loss:.6f}")
 
     def _generate_synthetic_dataset(self) -> Dataset:
@@ -954,7 +954,7 @@ class PointNetAgent(QObject):
         if output_path is None:
             output_path = os.path.join(self.MODEL_DIR, 'pointnet_cw.onnx')
 
-        self.model.eval()
+        self.model.train(False)
         dummy = torch.randn(1, self.num_points, 3, device=DEVICE)
 
         try:
