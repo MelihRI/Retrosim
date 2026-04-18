@@ -420,15 +420,147 @@ class ShipDPreprocessor:
             pc /= max_dist
         return pc
 
+    def ply_to_point_cloud(self, ply_path: str) -> np.ndarray:
+        """
+        Load PLY (ASCII/binary) point cloud file.
+
+        Args:
+            ply_path: Path to .ply file
+
+        Returns:
+            Normalised (num_points, 3) float32 array
+        """
+        vertices = []
+        with open(ply_path, 'r', errors='ignore') as f:
+            header_done = False
+            vertex_count = 0
+            for line in f:
+                line = line.strip()
+                if not header_done:
+                    if line.startswith('element vertex'):
+                        vertex_count = int(line.split()[-1])
+                    if line == 'end_header':
+                        header_done = True
+                    continue
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        vertices.append([float(parts[0]),
+                                         float(parts[1]),
+                                         float(parts[2])])
+                    except ValueError:
+                        continue
+                if len(vertices) >= vertex_count > 0:
+                    break
+
+        if not vertices:
+            raise ValueError(f"No vertices found in PLY: {ply_path}")
+
+        pc = np.array(vertices, dtype=np.float32)
+        return self._resample_and_normalise(pc)
+
+    def xyz_to_point_cloud(self, xyz_path: str) -> np.ndarray:
+        """
+        Load XYZ point cloud file (whitespace-separated x y z [optional fields]).
+
+        Args:
+            xyz_path: Path to .xyz or .csv file
+
+        Returns:
+            Normalised (num_points, 3) float32 array
+        """
+        try:
+            # Try loading as space-separated numeric data
+            data = np.loadtxt(xyz_path, dtype=np.float32,
+                              usecols=(0, 1, 2), comments='#')
+        except Exception:
+            # Fall back to comma-separated
+            data = np.loadtxt(xyz_path, dtype=np.float32,
+                              usecols=(0, 1, 2), delimiter=',', comments='#')
+
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+        if data.shape[1] < 3:
+            raise ValueError(f"XYZ file must have ≥3 columns, got {data.shape[1]}")
+
+        return self._resample_and_normalise(data[:, :3])
+
+    def npy_to_point_cloud(self, npy_path: str) -> np.ndarray:
+        """
+        Load pre-computed .npy point cloud.
+
+        Returns:
+            Normalised (num_points, 3) float32 array
+        """
+        pc = np.load(npy_path).astype(np.float32)
+        if pc.ndim == 1:
+            pc = pc.reshape(-1, 3)
+        return self._resample_and_normalise(pc)
+
+    def _resample_and_normalise(self, pc: np.ndarray) -> np.ndarray:
+        """Resample to target num_points and normalise."""
+        if len(pc) == 0:
+            return np.zeros((self.num_points, 3), dtype=np.float32)
+
+        if len(pc) > self.num_points:
+            indices = np.random.choice(len(pc), self.num_points, replace=False)
+        else:
+            indices = np.random.choice(len(pc), self.num_points, replace=True)
+
+        pc = pc[indices]
+        return self._normalise(pc)
+
+    def load_any(self, file_path: str) -> np.ndarray:
+        """
+        Universal loader: auto-detect format and convert to point cloud.
+
+        Supported: .stl, .obj, .ply, .xyz, .csv, .npy, .npz
+
+        Args:
+            file_path: Path to any supported geometry file.
+
+        Returns:
+            Normalised (num_points, 3) float32 point cloud.
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == '.stl':
+            return self.stl_to_point_cloud(file_path)
+        elif ext == '.obj':
+            return self.obj_to_point_cloud(file_path)
+        elif ext == '.ply':
+            return self.ply_to_point_cloud(file_path)
+        elif ext in ('.xyz', '.csv', '.txt'):
+            return self.xyz_to_point_cloud(file_path)
+        elif ext == '.npy':
+            return self.npy_to_point_cloud(file_path)
+        elif ext == '.npz':
+            data = np.load(file_path)
+            key = list(data.keys())[0]
+            return self._resample_and_normalise(data[key].astype(np.float32))
+        else:
+            # Try via RetrosimHullAdapter (STL/OBJ with advanced parsing)
+            try:
+                from core.geometry.FFDHullMorpher import RetrosimHullAdapter
+                return RetrosimHullAdapter.import_mesh_as_point_cloud(
+                    file_path, self.num_points)
+            except Exception:
+                raise ValueError(
+                    f"Unsupported file format: {ext}. "
+                    "Supported: .stl, .obj, .ply, .xyz, .csv, .npy, .npz"
+                )
+
     def batch_convert(self, input_dir: str, output_dir: str,
                       file_ext: str = '.stl') -> List[str]:
         """
-        Batch convert all mesh files in a directory to .npy point clouds.
+        Batch convert geometry files to .npy point clouds.
+
+        Supports: .stl, .obj, .ply, .xyz, .csv
 
         Args:
-            input_dir:  Directory with STL/OBJ files
+            input_dir:  Directory with geometry files
             output_dir: Where to save .npy files
-            file_ext:   '.stl' or '.obj'
+            file_ext:   File extension to filter (e.g., '.stl')
 
         Returns:
             List of output file paths
@@ -439,19 +571,15 @@ class ShipDPreprocessor:
 
         for mf in mesh_files:
             try:
-                if file_ext == '.stl':
-                    pc = self.stl_to_point_cloud(mf)
-                else:
-                    pc = self.obj_to_point_cloud(mf)
-
+                pc = self.load_any(mf)
                 out_name = os.path.splitext(os.path.basename(mf))[0] + '.npy'
                 out_path = os.path.join(output_dir, out_name)
                 np.save(out_path, pc)
                 output_files.append(out_path)
             except Exception as e:
-                print(f"⚠️ Skipped {mf}: {e}")
+                print(f"[!] Skipped {mf}: {e}")
 
-        print(f"✅ Batch conversion: {len(output_files)}/{len(mesh_files)} files")
+        print(f"[OK] Batch conversion: {len(output_files)}/{len(mesh_files)} files")
         return output_files
 
 
@@ -489,7 +617,7 @@ class ShipDDataset(Dataset):
                     'Ct': float(row.get('Ct', 0)),
                 })
 
-        print(f"📂 ShipDDataset: {len(self.entries)} samples loaded")
+        print(f"[DIR] ShipDDataset: {len(self.entries)} samples loaded")
 
     def __len__(self):
         return len(self.entries)
@@ -588,7 +716,7 @@ class PointNetAgent(QObject):
             num_outputs=3  # Cw, Cf, Ct
         ).to(DEVICE)
         total = sum(p.numel() for p in self.model.parameters())
-        print(f"🧠 PointNet++ built: {total:,} parameters on {DEVICE}")
+        print(f"[PointNet++] Built: {total:,} parameters on {DEVICE}")
 
     def _try_load(self):
         """Attempt to load existing weights."""
@@ -599,14 +727,14 @@ class PointNetAgent(QObject):
                 self.model.load_state_dict(ckpt['model_state_dict'])
                 self.model.eval()
                 self.is_trained = True
-                print(f"✅ PointNet++ loaded: {pth_path}")
+                print(f"[OK] PointNet++ loaded: {pth_path}")
             except Exception as e:
-                print(f"⚠️ PointNet++ load failed: {e}")
+                print(f"[!] PointNet++ load failed: {e}")
         else:
             # Also try ONNX
             onnx_path = os.path.join(self.MODEL_DIR, 'pointnet_cw.onnx')
             if os.path.exists(onnx_path):
-                print(f"ℹ️ ONNX model found at {onnx_path}")
+                print(f"[i] ONNX model found at {onnx_path}")
 
     def predict_from_stl(self, stl_path: str, speed_knots: float = 12.0) -> Dict:
         """
@@ -720,7 +848,7 @@ class PointNetAgent(QObject):
                 pct = int((epoch + 1) / epochs * 100)
                 msg = f"PointNet++ Epoch {epoch+1}/{epochs} | Loss: {epoch_loss:.6f}"
                 self.progress_signal.emit(pct, msg)
-                print(f"📊 {msg}")
+                print(f"[#] {msg}")
 
         # Restore best
         if best_state:
@@ -729,7 +857,7 @@ class PointNetAgent(QObject):
         self.is_trained = True
         self._save_model()
         self.model.eval()
-        self.progress_signal.emit(100, f"✅ PointNet++ eğitim tamamlandı! Loss: {best_loss:.6f}")
+        self.progress_signal.emit(100, f"[OK] PointNet++ eğitim tamamlandı! Loss: {best_loss:.6f}")
 
     def _generate_synthetic_dataset(self) -> Dataset:
         """
@@ -738,12 +866,12 @@ class PointNetAgent(QObject):
         Uses RetrosimHullAdapter to create random hulls → point clouds
         and Holtrop-Mennen for ground truth resistance.
         """
-        print("🔧 Generating synthetic PointNet++ dataset...")
+        print("[*] Generating synthetic PointNet++ dataset...")
 
         try:
-            from core.geometry.hull_adapter import RetrosimHullAdapter
+            from core.geometry.FFDHullMorpher import RetrosimHullAdapter
         except ImportError:
-            print("⚠️ RetrosimHullAdapter not available — using random data")
+            print("[!] RetrosimHullAdapter not available — using random data")
             return self._random_fallback_dataset()
 
         n_samples = 300
@@ -815,7 +943,7 @@ class PointNetAgent(QObject):
             'model_state_dict': self.model.state_dict(),
             'num_points': self.num_points,
         }, path)
-        print(f"💾 PointNet++ saved: {path}")
+        print(f"[S] PointNet++ saved: {path}")
 
     def export_to_onnx(self, output_path: Optional[str] = None):
         """
@@ -840,7 +968,7 @@ class PointNetAgent(QObject):
                 },
                 opset_version=14,
             )
-            print(f"✅ ONNX exported: {output_path}")
+            print(f"[OK] ONNX exported: {output_path}")
         except Exception as e:
-            print(f"⚠️ ONNX export failed: {e}")
+            print(f"[!] ONNX export failed: {e}")
             self.error_signal.emit(f"ONNX export failed: {e}")

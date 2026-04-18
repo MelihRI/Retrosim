@@ -14,6 +14,7 @@ PyQt6-sip>=13.4.0
 # ============================================
 PyOpenGL>=3.1.6
 PyOpenGL-accelerate>=3.1.6
+pyqtgraph>=0.13.0
 numpy-stl>=3.0.0
 usd-core>=24.0
 

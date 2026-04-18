@@ -1,6 +1,47 @@
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
-venv/
+# Python sanal ortamı (En hassas ve gereksiz olan)
 .venv/
+venv/
+ENV/
+env/
+
+# Python derleme çıktıları
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache dosyaları
+.pytest_cache/
+.mypy_cache/
+
+# Editör ayarları (Kişisel tercihler içerir)
+.vscode/
+.idea/
+.cursor/
+
+# İşletim sistemi kalıntıları
+.DS_Store
+Thumbs.db
+
+# Eğer varsa, yerel veri tabanları veya loglar
+*.log
+*.sqlite3
+*.db
+
+# Çevre değişkenleri ve gizli anahtarlar
 .env
+.env.*
+secrets.json
+credentials.json
+
+# Makine Öğrenmesi Modelleri ve Büyük Dosyalar (GitHub'a yüklenmeyecek)
+models/*.pt
+models/*.pth
+models/*.h5
+models/*.pkl
+models/*.onnx
+
+# Yapay Zeka Ajan Planları ve Artifacts
+task.md
+PROJECT_SUMMARY.md
+walkthrough.md
+scratch/

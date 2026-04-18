@@ -15,6 +15,11 @@ class NodeType:
     VARIABLE = "Variable"
     RESULT_TABLE = "Result Table"
     
+    # --- New Backend Integrations ---
+    FFD_MORPHER = "FFD Hull Morpher"
+    OMNIVERSE = "Omniverse"
+    POINTNET = "PointNet Agent"
+    
 class SmartNodeItem(QStandardItem):
     """
     Custom Node Item that holds data about its type and associated logic.

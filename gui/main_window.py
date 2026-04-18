@@ -59,7 +59,7 @@ except ImportError as e:
 
 
 try:
-    from core.geometry.hull_adapter import RetrosimHullAdapter
+    from core.geometry.FFDHullMorpher import RetrosimHullAdapter
     HAS_GEOMETRY_ENGINE = True
 except ImportError:
     HAS_GEOMETRY_ENGINE = False
@@ -1323,7 +1323,7 @@ class SmartCAPEXMainWindow(QMainWindow):
         self.item_climate.setData(0, Qt.ItemDataRole.UserRole, NodeType.CLIMATE)
         
         # Ek özellikler alt düğümler olarak eklendi
-        self.item_cfd = QTreeWidgetItem(self.item_surrogate, ["🌊 PINN CFD Analizi"])
+        self.item_cfd = QTreeWidgetItem(self.item_surrogate, ["🌊 GC-FNO CFD Surrogate"])
         self.item_cfd.setData(0, Qt.ItemDataRole.UserRole, NodeType.CFD)
         
         self.item_run = QTreeWidgetItem(self.item_climate, ["▶️ Analiz / Run"])
@@ -1441,7 +1441,6 @@ class SmartCAPEXMainWindow(QMainWindow):
         main_layout.addWidget(self.bottom_panel)
 
         from agents.surrogate_modeler import SurrogateModeler 
-        from agents.pinn_cfd_agent import PINNCFDAgent
         from agents.modulus_agent import ModulusCFDAgent
         
         # Regulatory Agent (IMO CII + EU ETS monitoring)
@@ -1593,7 +1592,7 @@ class SmartCAPEXMainWindow(QMainWindow):
         """Eğit butonuna basılınca çalışır"""
         
         config = {
-            "model": "EANN (Emotional Neural Network)", # veya "Kriging"
+            "model": "XGBoost",  # Primary model (XGBoost > EANN)
             "epochs": 100,
             "anxiety": 0.1,
             "confidence": 0.2
@@ -1737,7 +1736,7 @@ class SmartCAPEXMainWindow(QMainWindow):
 
     def on_cfd_finished(self, results):
         """CFD analizi bitince görselleştirmeyi günceller"""
-        print("✅ PINN CFD Analizi Tamamlandı!")
+        print("✅ GC-FNO CFD Analizi Tamamlandı!")
         self.cfd_widget.update_plot(results) # Keep 2D updated in background
         self.model_3d_widget.update_cfd_results(results)
         # Force switch to 3D view

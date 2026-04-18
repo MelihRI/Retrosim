@@ -1,6 +1,13 @@
 import os
 import sys
 
+# Windows CMD Unicode Emoji Fix
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 # PyTorch backend (no special DLL workaround needed)
 try:
     import torch

@@ -12,6 +12,14 @@ try:
 except ImportError:
     HAS_USD = False
 
+try:
+    from core.geometry.FFDHullMorpher import (
+        HullParameterization, get_default_design_vector, RetrosimHullAdapter
+    )
+    HAS_HULL_PARAM = True
+except ImportError:
+    HAS_HULL_PARAM = False
+
 # --- MATH UTILS ---
 def translation(displacement):
     t = np.identity(4, dtype=np.float32)
@@ -255,285 +263,205 @@ class ShipHull(Node):
 
     def generate_hull_mesh(self):
         """
-        Generates a realistic hull mesh using naval architecture principles.
-        
-        Uses:
-        - Sectional Area Curve (SAC) for longitudinal volume distribution
-        - Lewis form sections for cross-section shapes
-        - Proper bow and stern fairing
-        - Sheer curve and deck camber
-        - Bulbous bow integration
+        Generates hull mesh using the unified HullParameterization engine.
+
+        Delegates to the B-spline parametric generator (core/geometry) so
+        that both the 3-D preview and the CFD/PINN export use the *same*
+        geometry.  The resulting mesh is transformed to viewport coordinates
+        using non-uniform scaling for visual clarity.
         """
-        self.stations = 60  # Higher resolution for smooth curves
-        self.pts_per_station = 32  # More points for smooth sections
-        
+        self.stations = 40
+        self.pts_per_station = 20
+
+        # --- Attempt parametric engine first ---
+        if HAS_HULL_PARAM:
+            try:
+                self._generate_from_parameterization()
+                return
+            except Exception as e:
+                print(f"HullParameterization fallback: {e}")
+
+        # --- Fallback: simple ellipsoidal placeholder ---
+        self._generate_simple_fallback()
+
+    def _generate_from_parameterization(self):
+        """Build mesh via HullParameterization + RetrosimHullAdapter."""
+        vessel_data = {
+            'loa': self.loa, 'lbp': self.lbp,
+            'beam': self.beam, 'draft': self.draft, 'depth': self.depth,
+            'cb': self.cb, 'cp': self.cp, 'cm': self.cm,
+            'bow_height': self.bow_h, 'stern_height': self.stern_h,
+            'bulb_length': self.bulb_l, 'bulb_radius': self.bulb_r,
+            'stern_shape': self.stern_s,
+        }
+
+        adapter = RetrosimHullAdapter()
+        adapter.set_from_ui(vessel_data)
+        dv = adapter._design_vector
+        hp = HullParameterization(dv)
+
+        n_st = self.stations
+        n_wl = self.pts_per_station
+        verts, faces = hp.generate_mesh(
+            n_stations=n_st, n_waterlines=n_wl, include_bulb=True
+        )
+
+        # --- Real-meters → viewport transform (UNIFORM scaling) ---
+        L_m = max(hp.dv['L'], 1.0)
+        T_m = max(hp.dv['T'], 0.1)
+
+        # Uniform base scale: maps ship length to viewport l_scale
+        # This preserves actual hull form proportions (bow taper, bilge, etc.)
+        base_scale = self.l_scale / L_m
+        # Slight Z exaggeration so the draft is visually prominent
+        z_exag = 1.8
+
+        vp = np.empty_like(verts)
+        vp[:, 0] = (verts[:, 0] - L_m / 2.0) * base_scale  # centre at x=0
+        vp[:, 1] = verts[:, 1] * base_scale                  # uniform Y
+        vp[:, 2] = (verts[:, 2] - T_m) * base_scale * z_exag # waterline → z=0
+
+        self.hull_vertices = vp.astype(np.float32)
+        self.hull_faces = faces
+
+        # --- Per-vertex normals (smooth shading) ---
+        self._compute_vertex_normals()
+
+        # --- Legacy hull_pts for render_special_features compat ---
+        self._build_legacy_hull_pts(n_st, n_wl)
+
+    # ---- helpers -------------------------------------------------------
+    def _compute_vertex_normals(self):
+        """Compute smooth per-vertex normals by averaging adjacent face normals."""
+        verts = self.hull_vertices
+        faces = self.hull_faces
+
+        v0 = verts[faces[:, 0]]
+        v1 = verts[faces[:, 1]]
+        v2 = verts[faces[:, 2]]
+        fn = np.cross(v1 - v0, v2 - v0)
+
+        vn = np.zeros_like(verts)
+        for i, f in enumerate(faces):
+            vn[f[0]] += fn[i]
+            vn[f[1]] += fn[i]
+            vn[f[2]] += fn[i]
+
+        norms = np.linalg.norm(vn, axis=1, keepdims=True)
+        norms[norms < 1e-10] = 1.0
+        self.vertex_normals = (vn / norms).astype(np.float32)
+
+    def _build_legacy_hull_pts(self, n_stations, n_waterlines):
+        """Synthesise legacy hull_pts list from the mesh vertices.
+
+        render_special_features / render_superstructure / render_outlines
+        reference self.hull_pts[i][j] for positioning appendages.
+        We reconstruct a compatible structure from the ring-based vertex grid.
+        """
+        pts_per_ring = 2 * n_waterlines - 1
+        n_mesh_rings = len(self.hull_vertices) // pts_per_ring
+        n_used = min(n_stations, n_mesh_rings)
+
+        hull_pts = []
+        for i in range(n_used):
+            ring_start = i * pts_per_ring
+            # Port side is the first n_waterlines entries of the ring
+            station = []
+            for j in range(n_waterlines):
+                idx = ring_start + j
+                if idx < len(self.hull_vertices):
+                    v = self.hull_vertices[idx]
+                    station.append((float(v[0]), float(abs(v[1])), float(v[2])))
+            if not station:
+                station = [(0, 0, 0)]
+            hull_pts.append(station)
+
+        self.hull_pts = hull_pts
+        self.normals = [[np.array([0, 1, 0])] * len(s) for s in hull_pts]
+
+    def _generate_simple_fallback(self):
+        """Ultra-simple ellipsoidal hull when HullParameterization is unavailable."""
         L = self.l_scale
-        B = self.b_scale / 2.0  # Half-beam
+        B = self.b_scale / 2.0
         T = self.t_scale
-        D = self.d_scale
-        
-        # Form coefficients
-        Cb = self.cb
-        Cp = self.cp
-        Cm = self.cm
-        
-        # Derived coefficients
-        # Cwp (Waterplane coefficient) - estimated from Cb
-        Cwp = 0.18 + 0.86 * Cb
-        
-        # Lcb position (fraction from midship, positive = forward)
-        # For bulk carriers, Lcb is usually slightly aft
-        Lcb = -0.02 + 0.1 * (Cb - 0.7)
-        
-        # Rise of floor (deadrise angle for bilge)
-        bilge_radius = B * np.sqrt(2.0 * (1.0 - Cm) / np.pi) if Cm < 0.99 else B * 0.05
-        bilge_radius = np.clip(bilge_radius, B * 0.05, B * 0.4)
-        
-        mesh_pts = []
-        
-        for i in range(self.stations + 1):
-            # Normalized position: 0 = stern, 1 = bow
-            xi = i / self.stations
+        n_st = self.stations
+        n_sec = 16
+
+        verts_list = []
+        for i in range(n_st + 1):
+            xi = i / n_st
             x = (xi - 0.5) * L
-            
-            # ========================================
-            # 1. SECTIONAL AREA CURVE (SAC)
-            # ========================================
-            # Using a more realistic SAC based on Cp
-            # Lackenby transformation for realistic longitudinal distribution
-            
-            if xi < 0.5:
-                # Aft body (stern to midship)
-                t = xi * 2.0  # 0 to 1
-                # Stern is sharper, use power function
-                n_aft = 1.5 + (1.0 - Cp) * 3.0
-                sac = np.power(t, 1.0/n_aft)
-            else:
-                # Fore body (midship to bow)
-                t = (xi - 0.5) * 2.0  # 0 to 1
-                # Forward end more gradual for wave-piercing
-                n_fwd = 2.0 + (1.0 - Cp) * 2.5
-                sac = 1.0 - np.power(t, n_fwd)
-            
-            # Adjust for Cb - fuller ships have more parallel midbody
-            if 0.25 < xi < 0.75:
-                parallel_factor = (Cb - 0.5) / 0.4
-                sac = sac + (1.0 - sac) * parallel_factor * 0.3
-            
-            sac = np.clip(sac, 0.01, 1.0)
-            
-            # ========================================
-            # 2. WATERPLANE SHAPE
-            # ========================================
-            # Waterplane is narrower than SAC suggests at ends
-            
-            if xi < 0.15:  # Stern region
-                wp_factor = np.power(xi / 0.15, 0.7)
-                # Transom stern - maintain some width
-                if self.stern_s > 0.5:
-                    wp_factor = max(wp_factor, 0.3 * self.stern_s)
-            elif xi > 0.85:  # Bow region  
-                wp_factor = np.power((1.0 - xi) / 0.15, 0.5)
-            else:
-                wp_factor = 1.0
-            
-            # Current beam at this station
-            current_beam = B * np.sqrt(sac) * wp_factor
-            current_beam = max(current_beam, 0.02 * B)  # Minimum for numerical stability
-            
-            # ========================================
-            # 3. SHEER CURVE
-            # ========================================
-            # Classic sheer curve - higher at bow and stern
-            
-            x_rel = (xi - 0.5) * 2.0  # -1 to 1
-            
-            # Bow sheer (more pronounced)
-            if x_rel > 0:
-                sheer = self.bow_h * 0.15 * np.power(x_rel, 2.0)
-            else:
-                # Stern sheer (gentler)
-                sheer = self.stern_h * 0.10 * np.power(-x_rel, 1.5)
-            
-            deck_z = D + sheer
-            
-            # ========================================
-            # 4. SECTION SHAPE (Lewis Form approximation)
-            # ========================================
-            # Generate points for half-section (starboard side)
-            
-            station_pts = []
-            
-            # Section shape parameters vary along length
-            if xi < 0.2:
-                # Stern sections: U-shaped for propeller clearance
-                section_fullness = 0.5 + 0.4 * (xi / 0.2)
-                deadrise = 0.15 * (1.0 - xi / 0.2)  # More deadrise at stern
-            elif xi > 0.8:
-                # Bow sections: V-shaped for wave cutting
-                bow_factor = (xi - 0.8) / 0.2
-                section_fullness = 0.9 - 0.5 * bow_factor
-                deadrise = 0.2 * bow_factor
-            else:
-                # Parallel midbody: box-like with bilge
-                section_fullness = 0.85 + 0.1 * Cm
-                deadrise = 0.02
-            
-            for j in range(self.pts_per_station):
-                # Parametric curve from centerline-bottom to deck edge
-                s = j / (self.pts_per_station - 1)  # 0 to 1
-                
-                # Split section into regions
-                if s < 0.15:
-                    # KEEL/BOTTOM region (flat with deadrise)
-                    t = s / 0.15
-                    y = current_beam * t * section_fullness * 0.7
-                    z = -T + deadrise * T * (1.0 - np.cos(t * np.pi / 2))
-                    
-                elif s < 0.35:
-                    # BILGE region (curved transition)
-                    t = (s - 0.15) / 0.20
-                    angle = t * np.pi / 2.0
-                    
-                    # Start from where bottom ended
-                    y_start = current_beam * section_fullness * 0.7
-                    z_start = -T + deadrise * T
-                    
-                    # Bilge circle
-                    r = bilge_radius * np.sqrt(sac)
-                    y = y_start + r * np.sin(angle)
-                    z = z_start + r * (1.0 - np.cos(angle))
-                    
-                elif s < 0.85:
-                    # SIDE region (nearly vertical with flare)
-                    t = (s - 0.35) / 0.50
-                    
-                    # Vertical side position
-                    y_bilge_end = current_beam * section_fullness * 0.7 + bilge_radius * np.sqrt(sac)
-                    z_bilge_end = -T + deadrise * T + bilge_radius * np.sqrt(sac)
-                    
-                    # Flare factor - increases towards bow
-                    flare = 0.0
-                    if xi > 0.7:
-                        flare = 0.15 * ((xi - 0.7) / 0.3) * t
-                    
-                    # Tumblehome for stern
-                    tumblehome = 0.0
-                    if xi < 0.2:
-                        tumblehome = -0.05 * ((0.2 - xi) / 0.2) * t
-                    
-                    y = y_bilge_end + (current_beam - y_bilge_end + current_beam * flare + current_beam * tumblehome) * t
-                    z = z_bilge_end + (deck_z - z_bilge_end) * t
-                    
-                else:
-                    # DECK EDGE region (round over or knuckle)
-                    t = (s - 0.85) / 0.15
-                    
-                    # Deck camber (slight curve)
-                    camber = 0.02 * B * (1.0 - t)
-                    
-                    y = current_beam + current_beam * 0.05 * (xi > 0.7) * ((xi - 0.7) / 0.3)
-                    z = deck_z - camber
-                
-                # ========================================
-                # 5. BOW REFINEMENT
-                # ========================================
-                if xi > 0.92:
-                    # Sharp bow convergence
-                    bow_taper = (xi - 0.92) / 0.08
-                    y *= (1.0 - bow_taper * 0.95)
-                    
-                    # Bow rake (forward lean)
-                    if z > 0:
-                        x_offset = bow_taper * 0.3 * L * 0.1
-                    else:
-                        x_offset = 0
-                    x = (xi - 0.5) * L + x_offset
-                
-                # ========================================
-                # 6. STERN REFINEMENT
-                # ========================================
-                if xi < 0.08:
-                    # Stern convergence (but maintain transom shape)
-                    stern_taper = 1.0 - (xi / 0.08)
-                    
-                    if self.stern_s > 0.5:  # Transom stern
-                        # Keep some width for transom
-                        y *= (1.0 - stern_taper * 0.5)
-                    else:  # Cruiser stern
-                        y *= (1.0 - stern_taper * 0.85)
-                    
-                    # Skeg area - deep and narrow
-                    if s < 0.3:
-                        y *= (1.0 - stern_taper * 0.6)
-                
-                station_pts.append((x, max(y, 0.001), z))
-            
-            mesh_pts.append(station_pts)
-        
-        self.hull_pts = mesh_pts
-        self.calculate_normals()
+            rx = 1.0 - (2 * xi - 1) ** 2
+            for j in range(n_sec + 1):
+                theta = (j / n_sec) * np.pi
+                y = B * rx * np.sin(theta)
+                z = -T * np.cos(theta)
+                verts_list.append([x, y, z])
 
-    def calculate_normals(self):
-        """Calculates smooth normals for the hull mesh"""
-        self.normals = []
-        for i in range(len(self.hull_pts)):
-            station_normals = []
-            for j in range(len(self.hull_pts[i])):
-                # Cross product of adjacent vectors
-                next_i = min(i + 1, len(self.hull_pts) - 1)
-                prev_i = max(i - 1, 0)
-                next_j = min(j + 1, len(self.hull_pts[i]) - 1)
-                prev_j = max(j - 1, 0)
-                
-                v1 = np.array(self.hull_pts[next_i][j]) - np.array(self.hull_pts[prev_i][j])
-                v2 = np.array(self.hull_pts[i][next_j]) - np.array(self.hull_pts[i][prev_j])
-                
-                n = np.cross(v2, v1)
-                norm = np.linalg.norm(n)
-                if norm > 0: n /= norm
-                station_normals.append(n)
-            self.normals.append(station_normals)
+        verts = np.array(verts_list, dtype=np.float32)
+        faces_list = []
+        stride = n_sec + 1
+        for i in range(n_st):
+            for j in range(n_sec):
+                v00 = i * stride + j
+                v01 = v00 + 1
+                v10 = v00 + stride
+                v11 = v10 + 1
+                faces_list.append([v00, v10, v01])
+                faces_list.append([v10, v11, v01])
 
+        self.hull_vertices = verts
+        self.hull_faces = np.array(faces_list, dtype=np.int32)
+        self._compute_vertex_normals()
+
+        # Legacy compat
+        hull_pts = []
+        for i in range(n_st + 1):
+            station = []
+            for j in range(n_sec + 1):
+                v = verts[i * stride + j]
+                station.append((float(v[0]), float(abs(v[1])), float(v[2])))
+            hull_pts.append(station)
+        self.hull_pts = hull_pts
+        self.normals = [[np.array([0, 1, 0])] * len(s) for s in hull_pts]
+
+    # ---- rendering -----------------------------------------------------
     def render_self(self):
-        """Main rendering pipeline for the vessel"""
-        glMaterialfv(GL_FRONT, GL_SPECULAR, [0.5, 0.5, 0.5, 1.0])
-        glMaterialfv(GL_FRONT, GL_SHININESS, [50.0])
-        
-        # 1. HULL SURFACE
-        for i in range(len(self.hull_pts) - 1):
-            glBegin(GL_TRIANGLE_STRIP)
-            for j in range(self.pts_per_station):
-                p1 = self.hull_pts[i][j]
-                p2 = self.hull_pts[i+1][j]
-                n1 = self.normals[i][j]
-                n2 = self.normals[i+1][j]
-                
-                if p1[2] < 0: glColor3f(0.06, 0.08, 0.15)
-                else: glColor3f(0.12, 0.16, 0.22)
-                
-                glNormal3fv(n1); glVertex3fv(p1)
-                glNormal3fv(n2); glVertex3fv(p2)
-            glEnd()
-            
-            # Starboard Mirror
-            glBegin(GL_TRIANGLE_STRIP)
-            for j in range(self.pts_per_station):
-                p1, p2 = self.hull_pts[i][j], self.hull_pts[i+1][j]
-                n1, n2 = self.normals[i][j], self.normals[i+1][j]
-                glNormal3f(n1[0], -n1[1], n1[2]); glVertex3f(p1[0], -p1[1], p1[2])
-                glNormal3f(n2[0], -n2[1], n2[2]); glVertex3f(p2[0], -p2[1], p2[2])
-            glEnd()
+        """Render the unified hull mesh produced by HullParameterization."""
+        if not hasattr(self, 'hull_vertices') or self.hull_vertices is None:
+            return
 
-        # 2. TRANSOM STERN & DECK
-        glBegin(GL_QUAD_STRIP); glColor3f(0.04, 0.05, 0.06); glNormal3f(-1, 0, 0)
-        for j in range(self.pts_per_station):
-            p = self.hull_pts[0][j]; glVertex3f(p[0], p[1], p[2]); glVertex3f(p[0], -p[1], p[2])
+        verts = self.hull_vertices
+        faces = self.hull_faces
+        normals = self.vertex_normals
+
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.6, 0.6, 0.6, 1.0])
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, [64.0])
+
+        # Pre-classify faces by depth for batched colour
+        fc_z = (verts[faces[:, 0], 2]
+                + verts[faces[:, 1], 2]
+                + verts[faces[:, 2], 2]) / 3.0
+
+        below = np.where(fc_z < -0.01)[0]
+        above = np.where(fc_z >= -0.01)[0]
+
+        # --- Below waterline (anti-fouling coating) ---
+        glColor4f(0.45, 0.10, 0.08, 0.95)
+        glBegin(GL_TRIANGLES)
+        for idx in below:
+            for vi in faces[idx]:
+                glNormal3fv(normals[vi])
+                glVertex3fv(verts[vi])
         glEnd()
 
-        glColor3f(0.2, 0.22, 0.25); glBegin(GL_QUAD_STRIP); glNormal3f(0, 0, 1)
-        for i in range(len(self.hull_pts)):
-            p = self.hull_pts[i][-1]; glVertex3f(p[0], p[1], p[2]); glVertex3f(p[0], -p[1], p[2])
+        # --- Above waterline (hull topsides) ---
+        glColor4f(0.10, 0.14, 0.20, 0.95)
+        glBegin(GL_TRIANGLES)
+        for idx in above:
+            for vi in faces[idx]:
+                glNormal3fv(normals[vi])
+                glVertex3fv(verts[vi])
         glEnd()
 
     def render_special_features(self):

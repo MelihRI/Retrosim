@@ -45,6 +45,12 @@ except ImportError:
     HAS_STL = False
 
 try:
+    from utils.pyjet_adapter import PyJetFlowField
+    HAS_PYJET = True
+except ImportError:
+    HAS_PYJET = False
+
+try:
     from pxr import Usd, UsdGeom
     HAS_USD = True
 except ImportError:
@@ -652,6 +658,30 @@ class PINNCFDAgent(QObject):
             stl_path=stl_path, usd_path=usd_path
         )
 
+        # ── Setup PyJet if available for physical baseline data ─────────────
+        pyjet_particles = None
+        if HAS_PYJET and stl_path and os.path.exists(stl_path):
+            self.progress_signal.emit(65, "🌊 PyJet (Grid-based solver) verileri de çıkarılıyor...")
+            try:
+                ship_mesh = stl_mesh.Mesh.from_file(stl_path)
+                verts = ship_mesh.vectors.reshape(-1, 3).astype(np.float32)
+                # Normalize and Center
+                verts -= verts.mean(axis=0)
+                ext = verts.max(0) - verts.min(0)
+                verts *= 1.5 / max(ext[0], 1e-3)
+                verts[:, 0] += 0.5 * 1.5
+                verts[:, 2] -= verts[:, 2].max() + (draft/loa)*1.5
+
+                nf = len(ship_mesh.vectors)
+                faces = np.arange(nf * 3).reshape(-1, 3).astype(np.uint32)
+
+                pyjet_flow = PyJetFlowField(verts, faces, ship_L=1.5, ship_B=(beam/loa)*1.5, ship_T=(draft/loa)*1.5, ship_speed=speed)
+                for _ in range(5): # Step a few frames to populate water
+                    pyjet_flow.step()
+                pyjet_particles = pyjet_flow.get_particles()
+            except Exception as e:
+                print(f"⚠️ PyJet data extraction failed: {e}")
+
         # ── Phase field on XZ plane (mid-ship slice, y=0) ─────────────────
         self.progress_signal.emit(70, "Faz alanı (VOF) hesaplanıyor...")
         alpha_field = self._compute_phase_field(X, Y, draft_norm)
@@ -670,6 +700,7 @@ class PINNCFDAgent(QObject):
             'froude':    Fr,
             'draft_norm': draft_norm,
             'is_pinn_trained': self.is_trained,
+            'pyjet_particle_count': len(pyjet_particles) if pyjet_particles is not None else 0,
             **resistance
         }
 

@@ -25,6 +25,13 @@ from PyQt6.QtGui import QFont
 
 import pyqtgraph.opengl as gl
 
+# PyJet
+try:
+    from utils.pyjet_adapter import PyJetFlowField
+    HAS_PYJET = True
+except ImportError:
+    HAS_PYJET = False
+
 try:
     from stl import mesh as stl_mesh
     HAS_STL = True
@@ -195,7 +202,6 @@ class CFDVisualizationWidget(QWidget):
         # GL items
         self.hull_mesh_item    = None
         self.hull_vertices     = None
-        self.free_surface_item = None
         self.domain_box_item   = None
         self.light_item        = None
         self.waterline_item    = None
@@ -211,14 +217,6 @@ class CFDVisualizationWidget(QWidget):
         self.p_spray_col = None
         self.p_wake_pos  = None
         self.p_wake_col  = None
-
-        # Free-surface mesh cache
-        self._fs_X = None
-        self._fs_Y = None
-        self._fs_faces = None
-        self._fs_hull_mask = None   # faces to hide (inside hull)
-        self._fs_nx = 0
-        self._fs_ny = 0
 
         # State
         self.resistance_data = {}
@@ -283,8 +281,32 @@ class CFDVisualizationWidget(QWidget):
                           "QPushButton:hover{background:#2a3a5a;}")
         btn.clicked.connect(self._reset_light)
         row.addWidget(btn)
+
+        if HAS_PYJET:
+            self.btn_pyjet = QPushButton("🌊 PyJet (Real-Time)")
+            self.btn_pyjet.setCheckable(True)
+            self.btn_pyjet.setStyleSheet(btn.styleSheet())
+            self.btn_pyjet.clicked.connect(self._toggle_pyjet)
+            row.addWidget(self.btn_pyjet)
+
         row.addStretch()
         self._main_layout.addWidget(bar, stretch=0)
+
+    # ── PyJet Toggle ──────────────────────────────────────────────────
+    def _toggle_pyjet(self):
+        if self.btn_pyjet.isChecked():
+            print("🚀 Switching to PyJet Engine...")
+            self.lbl_stats.setText("PyJet solver initializing...")
+            # Trigger rebuild using PyJet
+            if self.hull_vertices is not None:
+                # Need faces to init PyJet
+                pass # updated below
+        else:
+            print("🔙 Reverting to Output Flow...")
+            self._rebuild_flow()
+            
+        self.update_plot()
+
 
     def _setup_hud(self):
         f = QFont("Consolas", 9)
@@ -316,7 +338,6 @@ class CFDVisualizationWidget(QWidget):
     def _setup_scene(self):
         self._rebuild_flow()
         self._build_domain()
-        self._build_water()
         self._build_axes()
         self._build_light()
         self._create_scatters()
@@ -340,79 +361,6 @@ class CFDVisualizationWidget(QWidget):
         g.setSize(x=4.5*L, y=3*B); g.setSpacing(x=L*0.5, y=B*0.5)
         g.translate(0, 0, -1.5*T)
         self.gl_widget.addItem(g)
-
-    def _build_water(self):
-        """
-        Build free-surface mesh with hull cutout.
-
-        Faces whose centroid falls inside the hull waterplane are
-        removed so the hull cleanly pierces the water surface.
-        """
-        if self.free_surface_item:
-            self.gl_widget.removeItem(self.free_surface_item)
-            self.free_surface_item = None
-
-        L, B = self.ship_L, self.ship_B
-        nx, ny = 100, 60
-        x = np.linspace(-1.5 * L, 3.0 * L, nx)
-        y = np.linspace(-1.5 * B, 1.5 * B, ny)
-        X, Y = np.meshgrid(x, y)
-        self._fs_X, self._fs_Y = X.copy(), Y.copy()
-        self._fs_nx, self._fs_ny = nx, ny
-
-        # Elevation from physics
-        Z = self.flow.elevation(X, Y) if self.flow else np.zeros_like(X)
-
-        # Build all triangle faces
-        all_faces = []
-        for i in range(ny - 1):
-            for j in range(nx - 1):
-                a = i * nx + j
-                all_faces.append([a, a+1, a+nx])
-                all_faces.append([a+1, a+nx+1, a+nx])
-        all_faces = np.array(all_faces, dtype=np.uint32)
-
-        # Cull faces inside hull waterplane
-        verts_flat = np.stack([X, Y, Z], axis=-1).reshape(-1, 3)
-        cx = (verts_flat[all_faces[:, 0], 0] +
-              verts_flat[all_faces[:, 1], 0] +
-              verts_flat[all_faces[:, 2], 0]) / 3
-        cy = (verts_flat[all_faces[:, 0], 1] +
-              verts_flat[all_faces[:, 1], 1] +
-              verts_flat[all_faces[:, 2], 1]) / 3
-
-        if self.flow:
-            inside = self.flow.is_inside_hull(cx, cy)
-        else:
-            inside = np.zeros(len(cx), dtype=bool)
-
-        keep = ~inside
-        faces = all_faces[keep]
-        self._fs_faces = faces
-        self._fs_all_faces = all_faces
-        self._fs_keep_mask = keep
-
-        verts = verts_flat.astype(np.float32)
-        colors = self._water_colors(Z, faces)
-
-        self.free_surface_item = gl.GLMeshItem(
-            vertexes=verts, faces=faces, faceColors=colors,
-            smooth=True, drawEdges=False, shader='shaded')
-        self.gl_widget.addItem(self.free_surface_item)
-
-    def _water_colors(self, Z, faces):
-        """Ocean palette: deep navy → turquoise crests → white foam."""
-        zf = Z.flatten()
-        zn = (zf - zf.min()) / (zf.max() - zf.min() + 1e-8)
-        fz = (zn[faces[:, 0]] + zn[faces[:, 1]] + zn[faces[:, 2]]) / 3
-
-        n = len(faces)
-        c = np.zeros((n, 4), dtype=np.float32)
-        c[:, 0] = np.clip(0.01 + 0.35 * fz**1.8, 0, 0.9)
-        c[:, 1] = np.clip(0.06 + 0.60 * fz, 0, 0.9)
-        c[:, 2] = np.clip(0.20 + 0.60 * fz**0.6, 0, 0.95)
-        c[:, 3] = np.where(fz > 0.85, 0.80, 0.45)
-        return c
 
     def _build_axes(self):
         ax = gl.GLAxisItem()
@@ -468,7 +416,7 @@ class CFDVisualizationWidget(QWidget):
         vd = self._vessel_data
         if not self._hull_adapter:
             try:
-                from core.geometry.hull_adapter import RetrosimHullAdapter
+                from core.geometry.FFDHullMorpher import RetrosimHullAdapter
                 self._hull_adapter = RetrosimHullAdapter()
             except ImportError:
                 pass
@@ -510,10 +458,9 @@ class CFDVisualizationWidget(QWidget):
             self.ship_T = 1.5 * draft / max(loa, 1)
             self._vessel_data = dict(vessel_data)
 
-        # Rebuild physics + water
+        # Rebuild physics
         self._rebuild_flow()
         self._build_domain()
-        self._build_water()
 
         # Remove old hull
         if self.hull_mesh_item:
@@ -540,6 +487,7 @@ class CFDVisualizationWidget(QWidget):
             verts[:, 2] -= verts[:, 2].max() + self.ship_T
 
             self.hull_vertices = verts.copy()
+            self.hull_faces = faces.copy() # Store for PyJet
 
             # Colours: anti-fouling red below WL, steel grey above
             fz = verts[faces[:, 0], 2]
@@ -553,8 +501,7 @@ class CFDVisualizationWidget(QWidget):
                 smooth=True, drawEdges=False, shader='shaded')
             self.gl_widget.addItem(self.hull_mesh_item)
 
-            # Rebuild water with hull cutout
-            self._build_water()
+
 
             # Waterline contour
             self._draw_waterline(verts, faces)
@@ -584,48 +531,62 @@ class CFDVisualizationWidget(QWidget):
         L, B, T = self.ship_L, self.ship_B, self.ship_T
         Fr = self._froude()
 
-        # ── 1. Streamline flow particles (underwater) ─────────────────
-        nf = 8000
-        # Seed from inlet plane, spread in Y-Z
-        px = np.random.uniform(0.7 * L, 1.0 * L, nf)  # start upstream (ahead of bow)
-        py = np.random.normal(0, B * 0.7, nf)
-        py = np.clip(py, -1.4 * B, 1.4 * B)
-        pz = np.random.uniform(-1.2 * T, -0.01 * T, nf)
+        # Check which engine we are using
+        use_pyjet = getattr(self, 'btn_pyjet', None) and self.btn_pyjet.isChecked()
 
-        # Pre-deflect around hull at seed
-        if self.flow:
-            dy, dz = self.flow.deflect(px, py, pz)
-            py += dy * 30; pz += dz * 30
+        if use_pyjet and HAS_PYJET and hasattr(self, 'hull_faces'):
+            if not isinstance(self.flow, PyJetFlowField):
+                self.flow = PyJetFlowField(self.hull_vertices, self.hull_faces, L, B, T, self.ship_speed)
+        elif use_pyjet == False and isinstance(self.flow, PyJetFlowField):
+            self._rebuild_flow() # Revert to numpy potential flow
 
-        Cp = self.flow.pressure(px, py, pz) if self.flow else np.zeros(nf)
-        self.p_flow_pos = np.column_stack([px, py, pz]).astype(np.float32)
-        self.p_flow_col = self._cp_color(Cp)
-
-        # ── 2. Bow spray ──────────────────────────────────────────────
-        ns = 600
-        sx = np.random.normal(0.44 * L, 0.04 * L, ns)
-        sy = np.random.normal(0, B * 0.25, ns)
-        sz = np.random.exponential(T * 0.12, ns) * (1 + 4 * Fr)
-        br = np.random.uniform(0.8, 1.0, ns)
-        self.p_spray_pos = np.column_stack([sx, sy, sz]).astype(np.float32)
-        self.p_spray_col = np.column_stack([br, br, br*.95, np.full(ns, .4)]).astype(np.float32)
-
-        # ── 3. Wake tracers ───────────────────────────────────────────
-        nw = 2500
-        wx = np.random.uniform(-4 * L, -0.05 * L, nw)
-        wy_max = np.abs(wx - 0.5 * L) * np.tan(KELVIN_HALF)
-        wy = np.random.uniform(-1, 1, nw) * wy_max
-        wz = self.flow.elevation(wx, wy) if self.flow else np.zeros(nw)
-        wz += np.random.uniform(-0.003 * T, 0.005 * T, nw)
-        d = np.sqrt((wx - 0.5*L)**2 + wy**2 + 1e-6)
-        ints = np.interp(d, [0, 3*L], [0.95, 0.15])
-        self.p_wake_pos = np.column_stack([wx, wy, wz]).astype(np.float32)
-        self.p_wake_col = np.column_stack([ints*.7, ints*.85, ints*.5, np.full(nw, .5)]).astype(np.float32)
-
-        # Push to GPU
-        self.scat_flow.setData(pos=self.p_flow_pos, color=self.p_flow_col)
-        self.scat_spray.setData(pos=self.p_spray_pos, color=self.p_spray_col)
-        self.scat_wake.setData(pos=self.p_wake_pos, color=self.p_wake_col)
+        if use_pyjet:
+            # PyJet will handle particles entirely. Clear numpy dummy particles
+            self.p_spray_pos = np.zeros((0, 3), dtype=np.float32)
+            self.p_wake_pos = np.zeros((0, 3), dtype=np.float32)
+        else:
+            # ── 1. Streamline flow particles (underwater) ─────────────────
+            nf = 8000
+            # Seed from inlet plane, spread in Y-Z
+            px = np.random.uniform(0.7 * L, 1.0 * L, nf)  # start upstream (ahead of bow)
+            py = np.random.normal(0, B * 0.7, nf)
+            py = np.clip(py, -1.4 * B, 1.4 * B)
+            pz = np.random.uniform(-1.2 * T, -0.01 * T, nf)
+    
+            # Pre-deflect around hull at seed
+            if getattr(self, 'flow', None) and not isinstance(self.flow, PyJetFlowField):
+                dy, dz = self.flow.deflect(px, py, pz)
+                py += dy * 30; pz += dz * 30
+    
+            Cp = self.flow.pressure(px, py, pz) if self.flow else np.zeros(nf)
+            self.p_flow_pos = np.column_stack([px, py, pz]).astype(np.float32)
+            self.p_flow_col = self._cp_color(Cp)
+    
+            # ── 2. Bow spray ──────────────────────────────────────────────
+            ns = 600
+            sx = np.random.normal(0.44 * L, 0.04 * L, ns)
+            sy = np.random.normal(0, B * 0.25, ns)
+            sz = np.random.exponential(T * 0.12, ns) * (1 + 4 * Fr)
+            br = np.random.uniform(0.8, 1.0, ns)
+            self.p_spray_pos = np.column_stack([sx, sy, sz]).astype(np.float32)
+            self.p_spray_col = np.column_stack([br, br, br*.95, np.full(ns, .4)]).astype(np.float32)
+    
+            # ── 3. Wake tracers ───────────────────────────────────────────
+            nw = 2500
+            wx = np.random.uniform(-4 * L, -0.05 * L, nw)
+            wy_max = np.abs(wx - 0.5 * L) * np.tan(KELVIN_HALF)
+            wy = np.random.uniform(-1, 1, nw) * wy_max
+            wz = self.flow.elevation(wx, wy) if self.flow else np.zeros(nw)
+            wz += np.random.uniform(-0.003 * T, 0.005 * T, nw)
+            d = np.sqrt((wx - 0.5*L)**2 + wy**2 + 1e-6)
+            ints = np.interp(d, [0, 3*L], [0.95, 0.15])
+            self.p_wake_pos = np.column_stack([wx, wy, wz]).astype(np.float32)
+            self.p_wake_col = np.column_stack([ints*.7, ints*.85, ints*.5, np.full(nw, .5)]).astype(np.float32)
+    
+            # Push to GPU
+            self.scat_flow.setData(pos=self.p_flow_pos, color=self.p_flow_col)
+            self.scat_spray.setData(pos=self.p_spray_pos, color=self.p_spray_col)
+            self.scat_wake.setData(pos=self.p_wake_pos, color=self.p_wake_col)
 
         self.resistance_data = self._estimate_resistance()
         self._update_hud()
@@ -674,99 +635,83 @@ class CFDVisualizationWidget(QWidget):
         spd = max(self.ship_speed / 25.0, 0.3) * dt
         L, B, T = self.ship_L, self.ship_B, self.ship_T
 
-        # ── Flow particles: advect through velocity field ─────────────
-        if self.p_flow_pos is not None and self.flow:
-            p = self.p_flow_pos
-            ux, uy, uz = self.flow.velocity(p[:, 0], p[:, 1], p[:, 2])
+        if HAS_PYJET and isinstance(getattr(self, 'flow', None), PyJetFlowField):
+            # PyJet physics update
+            self.flow.step()
+            particles = self.flow.get_particles()
+            if particles is not None and len(particles) > 0:
+                # Color based on Z height
+                col = np.zeros((len(particles), 4), dtype=np.float32)
+                col[:, 0] = 0.1; col[:, 1] = 0.5; col[:, 2] = 0.9; col[:, 3] = 0.7
+                self.scat_flow.setData(pos=particles, color=col)
+                self.p_flow_pos = particles # For HUD point count logging
+        else:
+            # ── Flow particles: advect through velocity field ─────────────
+            if self.p_flow_pos is not None and self.flow:
+                p = self.p_flow_pos
+                ux, uy, uz = self.flow.velocity(p[:, 0], p[:, 1], p[:, 2])
+    
+                # Free-stream (backward) + perturbation
+                p[:, 0] -= spd + ux * dt * 0.5
+                p[:, 1] += uy * dt * 0.8
+                p[:, 2] += uz * dt * 0.4
+    
+                # Hard-body collision with hull
+                dy, dz = self.flow.deflect(p[:, 0], p[:, 1], p[:, 2])
+                p[:, 1] += dy
+                p[:, 2] += dz
+    
+                # Force particles to stay inside hull collision boundary
+                inside = self.flow.is_inside_hull(p[:, 0], p[:, 1])
+                if np.any(inside):
+                    hb = self.flow.hull_halfbeam(p[inside, 0])
+                    p[inside, 1] = np.sign(p[inside, 1] + 1e-8) * (hb + 0.02 * B)
+    
+                # Keep underwater
+                p[:, 2] = np.minimum(p[:, 2], -0.005 * T)
+    
+                # Recycle escaped particles at inlet
+                esc = (p[:, 0] < -1.5 * L) | (np.abs(p[:, 1]) > 1.5 * B) | (p[:, 2] < -1.5 * T)
+                nr = np.sum(esc)
+                if nr > 0:
+                    p[esc, 0] = np.random.uniform(0.7 * L, 1.0 * L, nr)
+                    p[esc, 1] = np.random.normal(0, B * 0.5, nr)
+                    p[esc, 2] = np.random.uniform(-1.2 * T, -0.01 * T, nr)
+    
+                # Colour from pressure
+                Cp = self.flow.pressure(p[:, 0], p[:, 1], p[:, 2])
+                self.p_flow_col = self._cp_color(Cp)
+                self.scat_flow.setData(pos=p, color=self.p_flow_col)
+    
+            # ── Spray (rise + drift) ──────────────────────────────────────
+            if self.p_spray_pos is not None:
+                self.p_spray_pos[:, 2] += 0.005
+                self.p_spray_pos[:, 0] -= spd * 0.3
+                self.p_spray_pos[:, 1] += np.random.normal(0, 0.002, len(self.p_spray_pos))
+                esc = (self.p_spray_pos[:, 2] > T * 3) | (self.p_spray_pos[:, 0] < -L)
+                nr = np.sum(esc)
+                if nr > 0:
+                    self.p_spray_pos[esc, 0] = np.random.normal(0.44*L, 0.04*L, nr)
+                    self.p_spray_pos[esc, 1] = np.random.normal(0, B*0.25, nr)
+                    self.p_spray_pos[esc, 2] = np.random.exponential(T*0.05, nr)
+                self.scat_spray.setData(pos=self.p_spray_pos, color=self.p_spray_col)
+    
+            # ── Wake tracers ──────────────────────────────────────────────
+            if self.p_wake_pos is not None:
+                self.p_wake_pos[:, 0] -= spd * 0.4
+                self.p_wake_pos[:, 1] += np.sign(self.p_wake_pos[:, 1]) * 0.0008
+                esc = self.p_wake_pos[:, 0] < -4.5 * L
+                nr = np.sum(esc)
+                if nr > 0:
+                    self.p_wake_pos[esc, 0] = np.random.uniform(-0.05*L, 0.4*L, nr)
+                    self.p_wake_pos[esc, 1] = np.random.uniform(-0.15*B, 0.15*B, nr)
+                    self.p_wake_pos[esc, 2] = np.random.uniform(-0.005*T, 0.005*T, nr)
+                self.scat_wake.setData(pos=self.p_wake_pos, color=self.p_wake_col)
 
-            # Free-stream (backward) + perturbation
-            p[:, 0] -= spd + ux * dt * 0.5
-            p[:, 1] += uy * dt * 0.8
-            p[:, 2] += uz * dt * 0.4
-
-            # Hard-body collision with hull
-            dy, dz = self.flow.deflect(p[:, 0], p[:, 1], p[:, 2])
-            p[:, 1] += dy
-            p[:, 2] += dz
-
-            # Force particles to stay inside hull collision boundary
-            inside = self.flow.is_inside_hull(p[:, 0], p[:, 1])
-            if np.any(inside):
-                hb = self.flow.hull_halfbeam(p[inside, 0])
-                p[inside, 1] = np.sign(p[inside, 1] + 1e-8) * (hb + 0.02 * B)
-
-            # Keep underwater
-            p[:, 2] = np.minimum(p[:, 2], -0.005 * T)
-
-            # Recycle escaped particles at inlet
-            esc = (p[:, 0] < -1.5 * L) | (np.abs(p[:, 1]) > 1.5 * B) | (p[:, 2] < -1.5 * T)
-            nr = np.sum(esc)
-            if nr > 0:
-                p[esc, 0] = np.random.uniform(0.7 * L, 1.0 * L, nr)
-                p[esc, 1] = np.random.normal(0, B * 0.5, nr)
-                p[esc, 2] = np.random.uniform(-1.2 * T, -0.01 * T, nr)
-
-            # Colour from pressure
-            Cp = self.flow.pressure(p[:, 0], p[:, 1], p[:, 2])
-            self.p_flow_col = self._cp_color(Cp)
-            self.scat_flow.setData(pos=p, color=self.p_flow_col)
-
-        # ── Spray (rise + drift) ──────────────────────────────────────
-        if self.p_spray_pos is not None:
-            self.p_spray_pos[:, 2] += 0.005
-            self.p_spray_pos[:, 0] -= spd * 0.3
-            self.p_spray_pos[:, 1] += np.random.normal(0, 0.002, len(self.p_spray_pos))
-            esc = (self.p_spray_pos[:, 2] > T * 3) | (self.p_spray_pos[:, 0] < -L)
-            nr = np.sum(esc)
-            if nr > 0:
-                self.p_spray_pos[esc, 0] = np.random.normal(0.44*L, 0.04*L, nr)
-                self.p_spray_pos[esc, 1] = np.random.normal(0, B*0.25, nr)
-                self.p_spray_pos[esc, 2] = np.random.exponential(T*0.05, nr)
-            self.scat_spray.setData(pos=self.p_spray_pos, color=self.p_spray_col)
-
-        # ── Wake tracers ──────────────────────────────────────────────
-        if self.p_wake_pos is not None:
-            self.p_wake_pos[:, 0] -= spd * 0.4
-            self.p_wake_pos[:, 1] += np.sign(self.p_wake_pos[:, 1]) * 0.0008
-            esc = self.p_wake_pos[:, 0] < -4.5 * L
-            nr = np.sum(esc)
-            if nr > 0:
-                self.p_wake_pos[esc, 0] = np.random.uniform(-0.05*L, 0.4*L, nr)
-                self.p_wake_pos[esc, 1] = np.random.uniform(-0.15*B, 0.15*B, nr)
-                self.p_wake_pos[esc, 2] = np.random.uniform(-0.005*T, 0.005*T, nr)
-            self.scat_wake.setData(pos=self.p_wake_pos, color=self.p_wake_col)
-
-        # ── Animate free-surface ──────────────────────────────────────
-        if self.free_surface_item and self._fs_X is not None:
-            self._animate_water()
 
         self.frame_count += 1
 
-    def _animate_water(self):
-        """Propagate waves on free surface each frame."""
-        X, Y = self._fs_X, self._fs_Y
-        L, T = self.ship_L, self.ship_T
-        Fr = self._froude()
-        t = self._time
 
-        Z = self.flow.elevation(X, Y) if self.flow else np.zeros_like(X)
-
-        # Time-propagating gravity waves
-        k0 = 1.0 / (Fr**2 * L + 1e-6)
-        omega = np.sqrt(G * k0 * L) * 0.25
-        Z += 0.004 * T * np.sin(k0 * (X - 0.5*L) - omega * t)
-
-        # Bow pulsation
-        br = np.sqrt((X - 0.46*L)**2 + Y**2 + 1e-6)
-        Z += 0.006 * T * Fr * np.sin(3 * omega * t) * np.exp(-5 * br / self.ship_B)
-
-        # Ambient swell
-        Z += 0.002 * T * np.sin(0.4*X/L + 0.6*t) * np.cos(0.25*Y/self.ship_B + 0.4*t)
-
-        verts = np.stack([X, Y, Z], axis=-1).reshape(-1, 3).astype(np.float32)
-        cols = self._water_colors(Z, self._fs_faces)
-        self.free_surface_item.setMeshData(
-            vertexes=verts, faces=self._fs_faces, faceColors=cols)
 
     # ── FPS / Light ───────────────────────────────────────────────────
     def _fps_update(self):
@@ -774,9 +719,8 @@ class CFDVisualizationWidget(QWidget):
         np_count = sum(len(a) for a in [self.p_flow_pos, self.p_spray_pos, self.p_wake_pos] if a is not None)
         self.lbl_stats.setText(
             f"FPS: {fps}\n"
-            f"Physics: Potential Flow + Kelvin Wake\n"
-            f"Particles: {np_count}\n"
-            f"Water Mesh: {self._fs_nx}×{self._fs_ny} (hull cutout)")
+            f"Physics: {'PyJet FLIP 3D' if type(getattr(self, 'flow', None)).__name__ == 'PyJetFlowField' else 'Potential Flow + Kelvin Wake'}\n"
+            f"Particles: {np_count}")
         self.lbl_stats.adjustSize()
         self.lbl_stats.move(self.width() - self.lbl_stats.width() - 10, 10)
 
