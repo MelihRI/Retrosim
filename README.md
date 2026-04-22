@@ -91,3 +91,26 @@ In addition to the 4-Agent core, the SmartCAPEX codebase includes state-of-the-a
 *   **Emotional Artificial Neural Networks:** *Aljahdali et al. (2025)* - Introduction of hormonal stress parameterization.
 *   **Multicriteria Optimization:** *Nguyen et al. (2025)* - TOPSIS Pareto boundary definitions for maritime investments.
 *   **Physics-Informed Surrogates:** Adapted from modern GPU-accelerated computing methodologies (e.g., FNO, NVIDIA).
+
+---
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If using this software in research, please cite:
+
+```text
+SmartCAPEX AI: Intelligent Multi-Agent Architecture for Maritime Retrofit Decisions
+Based on AI-Based Decision Support Systems methodology (Bocaneala et al.)
+Literature: Surrogate Modeling (Westermann et al., 2020), 
+            Emotional ANN (Aljahdali et al., 2025),
+            Pareto Optimality (Rosso et al., 2020)
+```
+
+---
+
+**SmartCAPEX AI v1.0** - Intelligent Maritime Retrofit Decision Support
+© 2025 SmartCAPEX AI Development Team
