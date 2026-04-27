@@ -1,4 +1,4 @@
-# SmartCAPEX AI Requirements
+# Retrosim Requirements
 # ==========================
 # Maritime Retrofit Decision Support System
 # Multi-Agent Architecture with 3D Digital Twin
@@ -24,6 +24,7 @@ usd-core>=24.0
 numpy>=1.22.0
 pandas>=1.5.0
 scipy>=1.8.0
+trimesh>=4.0.0
 
 # ============================================
 # Machine Learning & AI (PyTorch)

@@ -1,21 +1,20 @@
 """
-Omniverse Panel — World State Controller
-==========================================
+USD Viewer Panel — Stage Inspector & Prim Browser
+===================================================
 
-Provides a PyQt6 widget that acts as a "World State Controller" for the
-NVIDIA Omniverse pipeline. When Omniverse/USD libraries are not available,
-it falls back to a local USD metadata viewer.
+Provides a PyQt6 widget for inspecting USD/USDA hull geometry files.
+When pxr (usd-core) is available, provides full stage traversal;
+otherwise falls back to text-mode USDA parsing.
 
 Responsibilities:
   1. Display USD stage hierarchy and prim properties
-  2. Synchronise GUI state → USD stage (hull, flow field, annotations)
-  3. Toggle between Digital Twin mode and local OpenGL 3D viewer
-  4. Manage material assignments and display overrides
+  2. Browse prim tree and inspect attributes
+  3. Export/load USDA files
+  4. Optional flow field overlay (if pxr available)
 
 Usage:
-    panel = OmniversePanel()
+    panel = USDViewerPanel()
     panel.load_usd_stage("path/to/hull.usda")
-    panel.sync_flow_field(flow_data)
 """
 
 import os
@@ -193,21 +192,21 @@ class USDStageManager:
         return count
 
 
-class OmniversePanel(QWidget):
+class USDViewerPanel(QWidget):
     """
-    GUI panel for USD stage inspection and Omniverse connectivity.
+    GUI panel for USD stage inspection and prim browsing.
 
     Layout:
       ┌─────────────────────────────────────────┐
-      │  🌐 Omniverse / USD Digital Twin Panel  │
+      │  📐 USD Stage Viewer                      │
       ├──────────────┬──────────────────────────┤
       │  Prim Tree   │  Properties / Info       │
       │              │                          │
       │  Hull_Xform  │  Type: Mesh              │
       │   ├─ Hull    │  Points: 12,345          │
-      │   └─ Flow    │  Material: OmniPBR       │
+      │   └─ Flow    │  Material: UsdPreview    │
       ├──────────────┴──────────────────────────┤
-      │  Actions: Sync | Export | Refresh       │
+      │  Actions: Load | Export | Refresh       │
       └─────────────────────────────────────────┘
     """
 
@@ -225,7 +224,7 @@ class OmniversePanel(QWidget):
         layout.setSpacing(4)
 
         # ── Header ──
-        header = QLabel("🌐 Omniverse / USD Digital Twin")
+        header = QLabel("📐 USD Stage Viewer")
         header.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         header.setStyleSheet("color: #58a6ff;")
         layout.addWidget(header)
@@ -308,7 +307,7 @@ class OmniversePanel(QWidget):
         options_layout.addWidget(self.chk_flow_overlay)
 
         self.combo_material = QComboBox()
-        self.combo_material.addItems(["OmniPBR", "OmniGlass", "UsdPreviewSurface", "Wireframe"])
+        self.combo_material.addItems(["UsdPreviewSurface", "Wireframe"])
         self.combo_material.setStyleSheet("color: #c9d1d9; background: #21262d;")
         options_layout.addWidget(QLabel("Material:"))
         options_layout.addWidget(self.combo_material)
@@ -318,7 +317,7 @@ class OmniversePanel(QWidget):
     def _update_status(self):
         """Update connection status indicator."""
         if HAS_USD:
-            self.status_label.setText("✅ USD (pxr) Available — Omniverse Ready")
+            self.status_label.setText("✅ USD (pxr) Available")
             self.status_label.setStyleSheet("color: #238636; font-size: 10px;")
         else:
             self.status_label.setText("ℹ️ USD (pxr) Not Installed — Text Mode")

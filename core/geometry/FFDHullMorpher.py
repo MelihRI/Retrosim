@@ -11,10 +11,10 @@ Scientific Basis:
     - The Design Vector captures key naval architecture parameters that
       fully define a monohull surface.
 
-This module is intentionally isolated from the rest of the SmartCAPEX system
+This module is intentionally isolated from the rest of the Retrosim system
 to maintain clean Adapter Pattern separation.
 
-Author: SmartCAPEX AI Team
+Author: Retrosim Team
 License: MIT (third-party integration)
 """
 
@@ -611,11 +611,11 @@ class HullParameterization:
             y_half = self.section_halfbreadth(z_vals, x_n)
 
             # Area of section = 2 * ∫ y(z) dz (both sides)
-            area = 2.0 * np.trapz(y_half, z_vals * T)
+            area = 2.0 * np.trapezoid(y_half, z_vals * T)
             areas.append(area)
 
         areas = np.array(areas)
-        volume = np.trapz(areas, x_norm * L)
+        volume = np.trapezoid(areas, x_norm * L)
         return float(volume)
 
     def compute_wetted_surface(self, n_stations: int = 41, n_waterlines: int = 21) -> float:
@@ -650,7 +650,7 @@ class HullParameterization:
         y_half = self.waterplane_halfbreadth(x_norm)
 
         # Area = 2 * ∫ y(x) dx
-        area = 2.0 * np.trapz(y_half, x_norm * L)
+        area = 2.0 * np.trapezoid(y_half, x_norm * L)
         return float(area)
 
     def compute_block_coefficient(self) -> float:
@@ -691,124 +691,19 @@ class HullParameterization:
 
 
 
-# ShipHullGAN requirement: geomdl for NURBS
-try:
-    from geomdl import BSpline, NURBS, utilities
-    from geomdl.exchange import export_obj
-    GEOMDL_AVAILABLE = True
-except ImportError:
-    GEOMDL_AVAILABLE = False
-    import logging
-    logging.warning("geomdl not installed. NURBS reconstruction disabled.")
-
-class ShipHullGANEncoder:
-    '''Encodes a hull into 56 cross-sections X 25 points'''
-    def __init__(self, hp):
-        self.hp = hp
-        self.points = None
-        
-    def encode(self, num_sections=56, pts_per_section=25) -> __import__('numpy').ndarray:
-        import numpy as np
-        L = self.hp.dv['L']
-        T = self.hp.dv['T']
-        stations = np.linspace(0, 1, num_sections)
-        points_3d = np.zeros((num_sections, pts_per_section, 3))
-        for i, x_n in enumerate(stations):
-            x_m = x_n * L
-            keel_z = float(self.hp.keel_profile(np.array([x_n]))[0])
-            z_n = np.linspace(0, 1, pts_per_section)**1.5 
-            y_half = self.hp.section_halfbreadth(z_n, x_n)
-            for j in range(pts_per_section):
-                points_3d[i, j, 0] = x_m
-                points_3d[i, j, 1] = y_half[j]
-                points_3d[i, j, 2] = keel_z + z_n[j] * T
-        self.points = points_3d
-        return points_3d
-
-class GeometricMomentComputer:
-    '''Computes Geometric Moment Invariants (GMIs)'''
-    @staticmethod
-    def compute_gmi(points_3d: __import__('numpy').ndarray) -> __import__('numpy').ndarray:
-        import numpy as np
-        centroid = np.mean(points_3d.reshape(-1, 3), axis=0)
-        centered = points_3d.reshape(-1, 3) - centroid
-        m200 = np.sum(centered[:, 0]**2)
-        m020 = np.sum(centered[:, 1]**2)
-        m002 = np.sum(centered[:, 2]**2)
-        m110 = np.sum(centered[:, 0] * centered[:, 1])
-        return np.array([m200 + m020 + m002, m200*m020 - m110**2, np.linalg.norm(centroid)])
-
-class ShapeSignatureTensor:
-    '''Constructs the SST format'''
-    @staticmethod
-    def construct(points_3d: __import__('numpy').ndarray, gmis: __import__('numpy').ndarray) -> __import__('numpy').ndarray:
-        import numpy as np
-        num_sec, num_pts, _ = points_3d.shape
-        sst = np.zeros((num_sec, num_pts, 4))
-        sst[:, :, :3] = points_3d
-        sst[:, :, :3] /= (np.max(np.abs(points_3d)) + 1e-8)
-        return sst
-
-class NURBSReconstructor:
-    '''Reconstructs a smooth surface using geomdl'''
-    def __init__(self, sst_points: __import__('numpy').ndarray):
-        self.points = sst_points
-        self.surface = None
-    def reconstruct(self) -> tuple:
-        import numpy as np
-        if not GEOMDL_AVAILABLE:
-            raise RuntimeError("geomdl is required")
-        num_u, num_v, _ = self.points.shape
-        surf = NURBS.Surface()
-        surf.degree_u = 3
-        surf.degree_v = 3
-        surf.ctrlpts2d = self.points.tolist()
-        surf.knotvector_u = utilities.generate_knot_vector(surf.degree_u, num_u)
-        surf.knotvector_v = utilities.generate_knot_vector(surf.degree_v, num_v)
-        surf.delta = 0.05
-        surf.evaluate()
-        verts = np.array(surf.evalpts, dtype=np.float32)
-        u_pts = int(1.0 / surf.delta) + 1
-        v_pts = int(1.0 / surf.delta) + 1
-        faces = []
-        for i in range(u_pts - 1):
-            for j in range(v_pts - 1):
-                p1 = i * v_pts + j
-                p2 = i * v_pts + (j + 1)
-                p3 = (i + 1) * v_pts + j
-                p4 = (i + 1) * v_pts + (j + 1)
-                faces.append([p1, p3, p2])
-                faces.append([p2, p3, p4])
-        return verts, np.array(faces, dtype=np.int32)
-
-class FFDMorpher:
-    '''Applies Free-Form Deformation'''
-    def __init__(self, vertices: __import__('numpy').ndarray):
-        self.vertices = vertices.copy()
-    def morph_region(self, center, radius, displacement):
-        import numpy as np
-        c = np.array(center)
-        d = np.array(displacement)
-        dist = np.linalg.norm(self.vertices - c, axis=1)
-        mask = dist < radius
-        if np.any(mask):
-            falloff = np.exp(-(dist[mask]**2) / (radius**2 * 0.5))
-            self.vertices[mask] += np.outer(falloff, d)
-        return self.vertices
-
 
 """
 RetrosimHullAdapter — Abstraction Layer for Parametric Hull Design
 ====================================================================
 
-Adapter Pattern implementation that bridges the SmartCAPEX AI GUI
+Adapter Pattern implementation that bridges the Retrosim GUI
 with the isolated MIT DeCoDE parametric hull generator.
 
 Responsibilities:
     1. Convert PyQt6 UI inputs → 45-dimensional Design Vector
     2. Invoke HullParameterization for mesh generation
     3. Export mesh as STL file (numpy-stl)
-    4. Extract volumetric features for ML inputs (EANN / PINN)
+    4. Extract volumetric features for ML inputs (XGBoost / GC-FNO)
     5. Provide regression-based imputation for missing geometry parameters
 
 Scientific Basis:
@@ -816,7 +711,7 @@ Scientific Basis:
     - Statistical regression for missing parameter estimation
     - Ship-D 45-vector standard for parametric design
 
-Author: SmartCAPEX AI Team
+Author: Retrosim Team
 """
 
 import os
@@ -838,25 +733,7 @@ except ImportError:
 
 class RetrosimHullAdapter:
 
-    def get_ship_hull_gan_sst(self) -> __import__('numpy').ndarray:
-        if self._hull is None:
-            self._hull = HullParameterization(self._design_vector)
-        encoder = ShipHullGANEncoder(self._hull)
-        points = encoder.encode()
-        gmis = GeometricMomentComputer.compute_gmi(points)
-        return ShapeSignatureTensor.construct(points, gmis)
 
-    def get_nurbs_mesh(self) -> tuple:
-        if self._hull is None:
-            self._hull = HullParameterization(self._design_vector)
-        encoder = ShipHullGANEncoder(self._hull)
-        pts = encoder.encode()
-        try:
-            recon = NURBSReconstructor(pts)
-            return recon.reconstruct()
-        except Exception as e:
-            print(f"NURBS error: {e}")
-            return self.generate_mesh()
 
     @property
     def mesh(self):
@@ -868,7 +745,7 @@ class RetrosimHullAdapter:
         return True
 
     """
-    Adapts SmartCAPEX GUI vessel data to the 45-parameter Design Vector
+    Adapts Retrosim GUI vessel data to the 45-parameter Design Vector
     used by HullParameterization, then generates meshes and computes
     volumetric features.
 
@@ -1360,7 +1237,7 @@ class RetrosimHullAdapter:
         """
         Extract machine-learning-ready features from the hull geometry.
 
-        These features feed into the SurrogateModeler (EANN) and
+        These features feed into the SurrogateModeler (XGBoost) and
         PINNCFDAgent for hydrodynamic prediction.
 
         Returns:
@@ -2378,7 +2255,7 @@ class RetrosimHullAdapter:
             mu_vector: Optional FFD displacement vector.
 
         Returns:
-            Dictionary of geometric features for EANN/PINN input.
+            Dictionary of geometric features for XGBoost / GC-FNO input.
         """
         if mu_vector is not None:
             self.deform_hull_ffd(mu_vector)

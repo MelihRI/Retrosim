@@ -1,5 +1,5 @@
 """
-NVIDIA Modulus Training Script for SmartCAPEX
+NVIDIA Modulus Training Script for Retrosim
 =============================================
 This script trains a highly efficient Neural Operator (AFNO) to replace
 the slow OpenFOAM CFD simulations. Once trained, this model outputs

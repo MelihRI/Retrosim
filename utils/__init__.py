@@ -1,1 +1,1 @@
-# SmartCAPEX AI Utilities Package
+# Retrosim Utilities Package

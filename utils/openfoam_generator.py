@@ -1,7 +1,7 @@
 """
 OpenFOAM Data Generator (Solver Data)
 =====================================
-Automates the OpenFOAM CFD pipeline for SmartCAPEX ship geometries.
+Automates the OpenFOAM CFD pipeline for Retrosim ship geometries.
 Generates thousands of flow field arrays (U, p) for different hull
 shapes (STLs) and speeds to train the NVIDIA Modulus surrogate.
 

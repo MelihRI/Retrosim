@@ -27,6 +27,7 @@ from agents.climate_guardian import ClimateGuardian
 try:
     from gui.cfd_widget import CFDVisualizationWidget
     from gui.model_viewer_3d import ModelViewer3D
+    from gui.usd_viewer import USDViewerPanel
 except ImportError as e:
     # Fallback if 3D rendering imports fail (e.g. missing pyqtgraph or PyOpenGL)
     import traceback
@@ -57,6 +58,16 @@ except ImportError as e:
         def load_stl(self, *args): pass
         def add_shape(self, *args): pass
 
+    class USDViewerPanel(QWidget):
+        def __init__(self):
+            super().__init__()
+            layout = QVBoxLayout()
+            lbl = QLabel("USD Gösterici (Kütüphane Eksik)")
+            lbl.setStyleSheet("color: red; font-weight: bold;")
+            layout.addWidget(lbl)
+            self.setLayout(layout)
+        def load_usd_stage(self, *args): pass
+        def sync_flow_field(self, *args): pass
 
 try:
     from core.geometry.FFDHullMorpher import RetrosimHullAdapter
@@ -218,7 +229,7 @@ class ClimateWorker(QThread):
 # --- DATACLASS DEFINITIONS ---
 @dataclass
 class VesselData:
-    name: str = "M/V SmartCAPEX"
+    name: str = "M/V Retrosim"
     type: str = "Bulk Carrier"
     dwt: int = 55000
     loa: float = 190.0
@@ -247,7 +258,7 @@ class VesselData:
     eedi: float = 12.5
     age: int = 10
     
-    # EANN Environmental & Operational inputs
+    # Environmental & Operational inputs
     wave_height: float = 1.0
     wind_speed: float = 10.0
     current_speed: float = 0.0
@@ -267,11 +278,9 @@ class VesselData:
 
 @dataclass
 class SurrogateConfig:
-    model: str = "EANN (Physics-Informed)"
+    model: str = "XGBoost"
     epochs: int = 1000
     lr: float = 0.001
-    anxiety: float = 0.1
-    confidence: float = 0.2
     data_path: Optional[str] = None
 
 @dataclass
@@ -611,8 +620,8 @@ class SettingsManager(QWidget):
         self._add_float(form_perf, "Mevcut Yakıt Tük. (t/gün)", data, "fuel_consumption")
         self._add_float(form_perf, "Mevcut CO2 Emisyonu (t/gün)", data, "co2_emission")
 
-        # 2.5 Çevresel ve Operasyonel (EANN için)
-        form_env = self._create_group("Çevre ve Operasyon (EANN Ön İzleme)")
+        # 2.5 Çevresel ve Operasyonel
+        form_env = self._create_group("Çevre ve Operasyon")
         self._add_float(form_env, "Dalga Yüksekliği (m)", data, "wave_height")
         self._add_float(form_env, "Rüzgar Hızı (knots)", data, "wind_speed")
         self._add_float(form_env, "Akıntı Hızı (knots)", data, "current_speed")
@@ -754,12 +763,10 @@ class SettingsManager(QWidget):
         # 2. MODEL PARAMETRELERİ
         # Model Tipi
         self._add_combo(form, "Model Tipi", data, "model", 
-                       ["EANN (Emotional Neural Network)", "Kriging (Gaussian Process)", "Random Forest"])
+                       ["XGBoost", "Kriging (Gaussian Process)"])
         
-        # EANN Parametreleri
+        # Model Parameters
         self._add_int(form, "Epoch Sayısı", data, "epochs")
-        self._add_float(form, "Kaygı (Anxiety)", data, "anxiety")
-        self._add_float(form, "Güven (Confidence)", data, "confidence")
         
         # Checkbox
         chk = QCheckBox("GPU Hızlandırma Kullan")
@@ -850,7 +857,7 @@ class SettingsManager(QWidget):
 
     def _form_cfd(self, data):
         form = self._create_group("CFD Analiz Parametreleri")
-        self._add_combo(form, "Fizik Motoru (Solver)", data, "solver", ["NVIDIA Modulus 3D FNO", "Legacy 2D PINN"])
+        self._add_combo(form, "Fizik Motoru (Solver)", data, "solver", ["NVIDIA Modulus 3D FNO", "GC-FNO 3D"])
         self._add_int(form, "Çözünürlük (Grid)", data, "resolution")
         
         chk_p = QCheckBox("Basınç Konturlarını Göster")
@@ -877,7 +884,7 @@ class SettingsManager(QWidget):
         self._add_float(form_bc, "Genişlik Çarpanı (Y)", data, "domain_y_mult")
         self._add_float(form_bc, "Yükseklik Çarpanı (Z)", data, "domain_z_mult")
         
-        self.btn_run_cfd = QPushButton("🌊 PINN CFD ANALİZİNİ BAŞLAT")
+        self.btn_run_cfd = QPushButton("🌊 GC-FNO CFD ANALİZİNİ BAŞLAT")
         self.btn_run_cfd.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; padding: 12px; margin-top: 10px;")
         self.main_layout.addWidget(self.btn_run_cfd)
 
@@ -1276,12 +1283,12 @@ class NodeType:
     ADVANCED_ANALYSIS = 11  # TOPSIS + IPSO Gelişmiş Analiz
 
 # --- ANA PENCERE SINIFI ---
-class SmartCAPEXMainWindow(QMainWindow):
+class RetrosimMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
         # --- PENCERE AYARLARI ---
-        self.setWindowTitle("SmartCAPEX AI - Maritime Retrofit Decision Support")
+        self.setWindowTitle("Retrosim - Maritime Retrofit Decision Support")
         self.resize(1600, 1000)
         self.setMinimumSize(1200, 800)
         
@@ -1305,7 +1312,7 @@ class SmartCAPEXMainWindow(QMainWindow):
         # --- AĞAÇ YAPISI (TREE NODES) ---
         
         # 1. Kök Düğüm (Root)
-        self.root = QTreeWidgetItem(self.tree_view, ["SmartCAPEX Project"])
+        self.root = QTreeWidgetItem(self.tree_view, ["Retrosim Project"])
         self.root.setData(0, Qt.ItemDataRole.UserRole, NodeType.PROJECT) # Veri saklama
         self.root.setExpanded(True)
         
@@ -1392,6 +1399,30 @@ class SmartCAPEXMainWindow(QMainWindow):
         lbl_header.setObjectName("HeaderLabel")
         col3_layout.addWidget(lbl_header)
         
+        # Graphics Tabs / Toggles
+        self.graphics_tabs = QWidget()
+        tabs_layout = QHBoxLayout(self.graphics_tabs)
+        tabs_layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.btn_view_stl = QPushButton("🧊 Raw Mesh (STL)")
+        self.btn_view_stl.setCheckable(True)
+        self.btn_view_usd = QPushButton("🛸 Digital Twin (USD)")
+        self.btn_view_usd.setCheckable(True)
+        self.btn_view_cfd = QPushButton("🌊 CFD View")
+        self.btn_view_cfd.setCheckable(True)
+        
+        # Connect buttons to custom switch logic
+        self.btn_view_stl.clicked.connect(lambda: self._switch_graphics_view("STL"))
+        self.btn_view_usd.clicked.connect(lambda: self._switch_graphics_view("USD"))
+        self.btn_view_cfd.clicked.connect(lambda: self._switch_graphics_view("CFD"))
+        
+        tabs_layout.addWidget(self.btn_view_stl)
+        tabs_layout.addWidget(self.btn_view_usd)
+        tabs_layout.addWidget(self.btn_view_cfd)
+        tabs_layout.addStretch()
+        
+        col3_layout.addWidget(self.graphics_tabs)
+        
         # Graphics Area as Stacked Widget
         self.graphics_stack = QStackedWidget()
         self.graphics_stack.setObjectName("GraphicsStack")
@@ -1402,12 +1433,17 @@ class SmartCAPEXMainWindow(QMainWindow):
         
         self.cfd_widget = CFDVisualizationWidget()
         self.model_3d_widget = ModelViewer3D()
+        self.usd_viewer_widget = USDViewerPanel()
         
         self.graphics_stack.addWidget(self.placeholder_gfx)
         self.graphics_stack.addWidget(self.cfd_widget)
         self.graphics_stack.addWidget(self.model_3d_widget)
+        self.graphics_stack.addWidget(self.usd_viewer_widget)
         
         col3_layout.addWidget(self.graphics_stack)
+        
+        # Set default view
+        self._switch_graphics_view("STL")
         
         self.col_graphics.setLayout(col3_layout)
         
@@ -1466,6 +1502,24 @@ class SmartCAPEXMainWindow(QMainWindow):
 
         # ── Regulatory Status Bar (EU ETS + CII live indicators) ──
         self._setup_regulatory_status_bar()
+
+    def _switch_graphics_view(self, view_type):
+        """Graphics stack görünümünü ve buton durumlarını günceller."""
+        if view_type == "STL":
+            self.graphics_stack.setCurrentWidget(self.model_3d_widget)
+            self.btn_view_stl.setChecked(True)
+            self.btn_view_usd.setChecked(False)
+            self.btn_view_cfd.setChecked(False)
+        elif view_type == "USD":
+            self.graphics_stack.setCurrentWidget(self.usd_viewer_widget)
+            self.btn_view_usd.setChecked(True)
+            self.btn_view_stl.setChecked(False)
+            self.btn_view_cfd.setChecked(False)
+        elif view_type == "CFD":
+            self.graphics_stack.setCurrentWidget(self.cfd_widget)
+            self.btn_view_cfd.setChecked(True)
+            self.btn_view_stl.setChecked(False)
+            self.btn_view_usd.setChecked(False)
 
 
     def _setup_regulatory_status_bar(self):
@@ -1591,19 +1645,20 @@ class SmartCAPEXMainWindow(QMainWindow):
     def on_train_click(self):
         """Eğit butonuna basılınca çalışır"""
         
+        s_obj = self.settings_manager.data_store.get(NodeType.SURROGATE)
+        surrogate_data = asdict(s_obj) if is_dataclass(s_obj) else (s_obj or {})
+        
         config = {
-            "model": "XGBoost",  # Primary model (XGBoost > EANN)
-            "epochs": 100,
-            "anxiety": 0.1,
-            "confidence": 0.2
-            # "data_path": "veri.csv" # Eğer dosya seçtiysen buraya ekle
+            "model": surrogate_data.get("model", "XGBoost"),
+            "epochs": surrogate_data.get("epochs", 100),
+            "data_path": surrogate_data.get("data_path", None)
         }
         
         # Log alanına bilgi ver
         if hasattr(self, 'bottom_panel'):
-            # Eğer Log panelin varsa oraya yaz
-            print("Eğitim Başlatılıyor...") 
-        
+            self.bottom_panel.update_log(f"Eğitim Başlatılıyor... Model: {config['model']}, Epochs: {config['epochs']}")
+        else:
+            print(f"Eğitim Başlatılıyor... Model: {config['model']}")
         # 3. Thread (İş Parçacığı) Oluştur ve Başlat
         self.worker = TrainingWorker(self.surrogate_modeler, config)
         
@@ -1740,37 +1795,31 @@ class SmartCAPEXMainWindow(QMainWindow):
         self.cfd_widget.update_plot(results) # Keep 2D updated in background
         self.model_3d_widget.update_cfd_results(results)
         # Force switch to 3D view
-        self.graphics_stack.setCurrentWidget(self.model_3d_widget)
+        self._switch_graphics_view("STL")
 
     def on_modulus_finished(self, results):
-        """Modulus CFD analizi bitince Omniverse'e yansıt"""
+        """Modulus CFD analizi bitince USDViewerPanel'e yansıt"""
         print("✅ NVIDIA Modulus Analizi Tamamlandı!")
         if hasattr(self, 'bottom_panel'):
-            self.bottom_panel.update_log("Modulus Inference %100 tamamlandı. Omniverse'e veri aktarılıyor...")
+            self.bottom_panel.update_log("Modulus Inference %100 tamamlandı. USD'ye veri aktarılıyor...")
             
-        # Omniverse Streamer'ı başlat (USD dosyamız üzerinden)
         vessel_obj = self.settings_manager.data_store.get(NodeType.VESSEL)
         usd_path = getattr(vessel_obj, 'usd_path', None)
         
         if usd_path and os.path.exists(usd_path):
-            from utils.omniverse_streamer import OmniverseStreamer
-            if not self.omniverse_streamer:
-                self.omniverse_streamer = OmniverseStreamer(usd_path)
+            self.usd_viewer_widget.load_usd_stage(usd_path)
             
-            # Dalga yüksekliğini ve gemi hızını UI'dan al (varsayılan değerler ver)
-            env_obj = self.settings_manager.data_store.get(NodeType.CLIMATE)
-            wave_height = getattr(env_obj, 'mean_wave_height', 2.0) if env_obj else 2.0
-            ship_speed = getattr(vessel_obj, 'service_speed', 14.0) if vessel_obj else 14.0
-            
-            # Omniverse canlı akışını başlat
-            self.omniverse_streamer.update_environmental_state(wave_height, ship_speed)
-            self.omniverse_streamer.inject_modulus_cfd_results(None, None)
+            # Flow overlay'i USDViewerPanel üzerinden gönder
+            if results:
+                self.usd_viewer_widget.sync_flow_field(results)
+                
+            self._switch_graphics_view("USD")
             
             if hasattr(self, 'bottom_panel'):
-                self.bottom_panel.update_log("🌊 Omniverse Digital Twin Live Sync güncellendi. (Animasyonlar USD dosyasına yazıldı)")
+                self.bottom_panel.update_log("🌊 Digital Twin Live Sync güncellendi.")
         else:
             if hasattr(self, 'bottom_panel'):
-                self.bottom_panel.update_log("⚠️ USD dosyası bulunamadığı için Omniverse Stream atlandı. Lütfen parametrik gövde üretin.")
+                self.bottom_panel.update_log("⚠️ USD dosyası bulunamadı. Lütfen parametrik gövde üretin.")
 
     def on_climate_analysis_click(self):
         """Climate Guardian analizini başlatır"""
@@ -2249,7 +2298,7 @@ class SmartCAPEXMainWindow(QMainWindow):
         
         try:
             # Report generator import
-            from utils.report_generator import SmartCAPEXReportGenerator
+            from utils.report_generator import RetrosimReportGenerator
             
             # Gemi verilerini al
             v_obj = self.settings_manager.data_store.get(NodeType.VESSEL)
@@ -2266,7 +2315,7 @@ class SmartCAPEXMainWindow(QMainWindow):
             
             # Kaydet dialogu
             vessel_name = vessel_data.get('name', 'Vessel').replace('/', '_').replace(' ', '_')
-            default_name = f"SmartCAPEX_Report_{vessel_name}.pdf"
+            default_name = f"Retrosim_Report_{vessel_name}.pdf"
             
             filepath, _ = QFileDialog.getSaveFileName(
                 self, 
@@ -2280,7 +2329,7 @@ class SmartCAPEXMainWindow(QMainWindow):
                     self.settings_manager.advanced_progress_bar.setValue(70)
                 
                 # Rapor oluştur
-                generator = SmartCAPEXReportGenerator()
+                generator = RetrosimReportGenerator()
                 output_path = generator.generate_report(vessel_data, analysis_results, filepath)
                 
                 if hasattr(self.settings_manager, 'advanced_progress_bar'):
@@ -2415,20 +2464,21 @@ class SmartCAPEXMainWindow(QMainWindow):
         # 3D görüntüleyiciye yükle (Öncelikli USD, yoksa legacy STL)
         try:
             if usd_path and os.path.exists(usd_path):
-                self.model_3d_widget.load_usd(usd_path)
+                self.usd_viewer_widget.load_usd_stage(usd_path)
+                self._switch_graphics_view("USD")
             else:
                 self.model_3d_widget.load_stl(stl_path)
+                self._switch_graphics_view("STL")
         except Exception as e:
             print(f"⚠️ 3D Model yükleme hatası: {e}")
             self.model_3d_widget.load_stl(stl_path)
-            
-        self.graphics_stack.setCurrentWidget(self.model_3d_widget)
+            self._switch_graphics_view("STL")
 
         # Phase 3: Holtrop-Mennen Resistance + Ship-D DL Inference
         speed = vessel_data.get('speed', 12.0)
         ai_msg = ""
         try:
-            # Multi-fidelity prediction: PointNet++ → EANN → Holtrop
+            # Multi-fidelity prediction: GC-FNO → PointNet++ → XGBoost → Holtrop
             hydro_results = getattr(self, 'surrogate_modeler').predict_hydrodynamics(vessel_data, speed)
             Rt = hydro_results.get('Rt_holtrop', 0)
             Rw = hydro_results.get('Rw_holtrop', 0)
@@ -2529,9 +2579,10 @@ class SmartCAPEXMainWindow(QMainWindow):
         
         # 3D Görüntüleyici varsayılan olarak hepsi için sağda kalsın (CFD hariç istersen)
         if node_type == NodeType.CFD:
-            self.graphics_stack.setCurrentWidget(self.cfd_widget)
+            self._switch_graphics_view("CFD")
         else:
-            self.graphics_stack.setCurrentWidget(self.model_3d_widget)
+            if self.graphics_stack.currentWidget() == self.cfd_widget:
+                self._switch_graphics_view("STL")
         
         # EĞER GEMİ VERİSİ SEÇİLDİYSE 3D MODELİ GÜNCELLE
         if node_type == NodeType.VESSEL:
@@ -2539,12 +2590,15 @@ class SmartCAPEXMainWindow(QMainWindow):
             vessel_data = asdict(v_obj) if is_dataclass(v_obj) else (v_obj or {})
             
             # Check for Custom USD/STL
-            if vessel_data.get('usd_path'):
-                self.model_3d_widget.load_usd(vessel_data['usd_path'])
+            if vessel_data.get('usd_path') and os.path.exists(vessel_data['usd_path']):
+                self.usd_viewer_widget.load_usd_stage(vessel_data['usd_path'])
+                self._switch_graphics_view("USD")
             elif vessel_data.get('stl_path'):
                 self.model_3d_widget.load_stl(vessel_data['stl_path'])
+                self._switch_graphics_view("STL")
             else:
                 self.model_3d_widget.update_vessel_hull(vessel_data)
+                self._switch_graphics_view("STL")
             
             # Export/Import butonlarını bağla
             if hasattr(self.settings_manager, 'btn_export_vessel'):
@@ -2826,8 +2880,8 @@ class SettingsManager(QWidget):
         
         # PROJE VERİSİ (Normalde veritabanından gelecek)
         self.project_data = {
-            "SmartCAPEX Project": {"type": "Project", "label": "Ana Proje"},
-            "Gemi Veri Girişi": {"type": "Gemi", "label": "M/V SmartCAPEX", "dwt": 50000},
+            "Retrosim Project": {"type": "Project", "label": "Ana Proje"},
+            "Gemi Veri Girişi": {"type": "Gemi", "label": "M/V Retrosim", "dwt": 50000},
             "Surrogate Modeler": {"type": "Surrogate", "label": "Yapay Zeka Modeli"},
             "Optimizer": {"type": "Optimizer", "pop": 50},
             "Climate Guardian": {"type": "Guardian", "year": 2030},

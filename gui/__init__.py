@@ -1,1 +1,1 @@
-# SmartCAPEX AI GUI Package
+# Retrosim GUI Package

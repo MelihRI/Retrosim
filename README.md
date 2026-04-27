@@ -1,19 +1,19 @@
-# 🚢 SmartCAPEX AI - Integrated Maritime Retrofit Decision Support
+# 🚢 Retrosim - Integrated Maritime Retrofit Decision Support
 
-**SmartCAPEX AI** is a state-of-the-art, multi-agent desktop application engineered for analyzing maritime retrofit investments. Designed specifically for the maritime sector (including aging coaster vessels), it moves beyond traditional rule-based software by leveraging a network of specialized **Intelligent Agents**. The system utilizes modern computational methods including **Emotional Artificial Neural Networks (EANN)**, **NVIDIA Modulus**, **PointNet++**, and multi-criteria decision making (MCDM) as established by *Aljahdali et al. (2025)* and *Nguyen et al. (2025)*.
+**Retrosim** is a state-of-the-art, multi-agent desktop application engineered for analyzing maritime retrofit investments. Designed specifically for the maritime sector (including aging coaster vessels), it moves beyond traditional rule-based software by leveraging a network of specialized **Intelligent Agents**. The system utilizes modern computational methods including **XGBoost Surrogate Modeling**, **Geometry-Conditioned Fourier Neural Operators (GC-FNO)**, **PointNet++**, and multi-criteria decision making (MCDM) as established by *Westermann et al. (2020)* and *Nguyen et al. (2025)*.
 
 ---
 
 ## 🏗️ Architecture: The 4 Intelligent Agents
 
-The core of SmartCAPEX AI operates on a decentralized, agent-based architecture where each "Agent" focuses on a highly specific domain of the maritime digital twin workflow.
+The core of Retrosim operates on a decentralized, agent-based architecture where each "Agent" focuses on a highly specific domain of the maritime digital twin workflow.
 
-### 🤖 1. The Predictor Agent (`EANN Core`)
+### 🤖 1. The Predictor Agent (`Surrogate Modeler & GC-FNO`)
 The central "brain" of the operation. It creates the vessel's *Digital Twin* and calculates instantaneous fuel consumption by assessing physical characteristics and environmental conditions.
-*   **Model:** Emotional Artificial Neural Network (EANN) based on *Aljahdali et al. (2025)*.
-*   **Unique Feature (Hormonal Modulation):** Unlike standard ANNs, this agent responds to environmental "stress" factors (Wave height, Wind power) using hormonal weighting parameters ($H_a, H_b, H_c$). 
-*   **Drift Detection:** Actively warns the user if external conditions exceed the safety bounds of its training distribution (e.g., extreme hurricane conditions).
-*   **Extensions:** Integrates seamlessly with `PointNetAgent` for processing raw 3D hull geometry (Point Clouds) and `ModulusAgent` for high-fidelity physics AI surrogates.
+*   **Tabular Model:** **XGBoost Ensemble** for instant resistance predictions based on a 45-parameter Design Vector.
+*   **3D Geometric Model:** **PointNet++** for direct resistance prediction from 3D Point Cloud hull topologies.
+*   **Physics AI Surrogate:** **Geometry-Conditioned Fourier Neural Operator (GC-FNO)** with dual-head architecture to predict both 3D fluid dynamics `(u,v,w,p)` and scalar resistance $C_T$, strictly enforcing physics via exact boolean boundary masking.
+*   **Drift Detection:** Kriging (Gaussian Process) is used to actively warn the user with confidence bounds if external conditions exceed the safety limits of the training distribution.
 
 ### 💰 2. The Investment Strategist (`MultiObjectiveOptimizer`)
 Translates pure physics into financial reality. Evaluates economic feasibility and competes various investment scenarios using NPV and Discounted Cash Flow (DCF).
@@ -39,22 +39,25 @@ The bridge between the user and the predictive backend. Ensures pristine data st
 ## 🔄 Interaction Flow (The System Loop)
 
 1.  **Initialization:** User defines the vessel parameters via the `Asset Manager`. Missing geometries are reconstructed via B-Spline interpolation (`FFDHullMorpher`).
-2.  **Timeline Setup:** The `Investment Strategist` constructs a 20-year financial timeline.
-3.  **Annual Iteration:** For every single year on the timeline:
+2.  **Pipeline Generation:** The `RetrosimPipeline` uses the `GeometryAssembler` to create 3D Point Clouds and SDF grid tensors.
+3.  **CFD Execution:** The `OpenFOAMRunner` simulates baseline hydrodynamics to feed the FNO surrogate model.
+4.  **Timeline Setup:** The `Investment Strategist` constructs a 20-year financial timeline.
+5.  **Annual Iteration:** For every single year on the timeline:
     *   `Climate Guardian` determines that year's specific environmental penalties.
-    *   `Predictor Agent` ingests the modified penalties along with the vessel's 3D Point Cloud to predict exact fuel consumption.
+    *   `GC-FNO Agent` ingests the modified penalties along with the vessel's 3D SDF to predict exact fuel consumption dynamically.
     *   `Investment Strategist` compiles fuel costs, ETS carbon taxes, and freight revenues to update the annual **Cash Flow**.
-4.  **Verdict:** The system plots the 3 competing scenarios (Do-Nothing vs. Retrofit vs. New Build) dynamically and recommends the "Most Profitable Investment" directly on the UI dashboard.
+6.  **Verdict:** The system plots the 3 competing scenarios (Do-Nothing vs. Retrofit vs. New Build) dynamically and recommends the "Most Profitable Investment" directly on the UI dashboard.
 
 ---
 
 ## ⚙️ Advanced Engineering Modules
 
-In addition to the 4-Agent core, the SmartCAPEX codebase includes state-of-the-art simulation layers:
-*   **Geometry Engine (`core/geometry/FFDHullMorpher.py`):** Uses Free-Form Deformation (FFD) to generate mathematically solid B-Spline hulls, easily convertible into Point Clouds or STLs.
-*   **AI-Physics Surrogates (`agents/modulus_agent.py` & `pointnet_agent.py`):** Implements NVIDIA Modulus and PointNet++ network paradigms allowing deep learning networks to "understand" hull topologies natively.
-*   **Fluid Engine (`gui/cfd_widget.py`):** Visualizes localized real-time hydrodynamics utilizing Python-integrated fluid environments (`fluid-engine-dev` PyJet).
-*   **OpenFOAM Bridge (`agents/openfoam_bridge.py`):** Connects the lightweight parametric interfaces to heavy-duty OpenFOAM instances for Ground-Truth CFD validation.
+In addition to the 4-Agent core, the Retrosim codebase includes state-of-the-art simulation layers:
+*   **Geometry Engine (`core/geometry_assembler.py`):** Complete STL-to-SDF pipeline converting parametric 45-D Design Vectors into 6-channel 3D tensors `[SDF, x, y, z, Re, Fr]`.
+*   **Automated CFD (`core/openfoam_runner.py`):** Fully automated `simpleFoam` OpenFOAM pipeline for generating ground-truth RANS hydrodynamics and extracting drag coefficients.
+*   **AI-Physics Surrogates (`models/gc_fno3d.py`):** Production Geometry-Conditioned Fourier Neural Operator (GC-FNO) with a dual-head architecture predicting both the full 3D flow field `[u, v, w, p]` and scalar resistance $C_T$, utilizing exact boolean boundary masking.
+*   **End-to-End Orchestrator (`pipeline/orchestrator.py`):** 3-stage `RetrosimPipeline` tying together geometry generation, automated OpenFOAM CFD generation, GC-FNO training, and inference.
+*   **Fluid Engine (`gui/cfd_widget.py`):** Visualizes localized real-time hydrodynamics utilizing Python-integrated fluid environments.
 
 ---
 
@@ -88,9 +91,10 @@ In addition to the 4-Agent core, the SmartCAPEX codebase includes state-of-the-a
 
 ## 🔬 Scientific Literature Base
 
-*   **Emotional Artificial Neural Networks:** *Aljahdali et al. (2025)* - Introduction of hormonal stress parameterization.
+*   **Geometry-Conditioned Physics AI:** *Li et al. (2021)* - Fourier Neural Operator for Parametric PDEs.
 *   **Multicriteria Optimization:** *Nguyen et al. (2025)* - TOPSIS Pareto boundary definitions for maritime investments.
-*   **Physics-Informed Surrogates:** Adapted from modern GPU-accelerated computing methodologies (e.g., FNO, NVIDIA).
+*   **Point Cloud Feature Extraction:** *Qi et al. (2017)* - PointNet++ deep hierarchical feature learning on point sets.
+*   **Parametric Hull Generation:** MIT DeCoDE Lab (Ship-D) - Large scale dataset and 45-parameter B-Spline generation.
 
 ---
 
@@ -103,14 +107,14 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 If using this software in research, please cite:
 
 ```text
-SmartCAPEX AI: Intelligent Multi-Agent Architecture for Maritime Retrofit Decisions
+Retrosim: Intelligent Multi-Agent Architecture for Maritime Retrofit Decisions
 Based on AI-Based Decision Support Systems methodology (Bocaneala et al.)
 Literature: Surrogate Modeling (Westermann et al., 2020), 
-            Emotional ANN (Aljahdali et al., 2025),
+            Fourier Neural Operator (Li et al., 2021),
             Pareto Optimality (Rosso et al., 2020)
 ```
 
 ---
 
-**SmartCAPEX AI v1.0** - Intelligent Maritime Retrofit Decision Support
-© 2025 SmartCAPEX AI Development Team
+**Retrosim v1.0** - Intelligent Maritime Retrofit Decision Support
+© 2025 Retrosim Development Team

@@ -1,5 +1,5 @@
 """
-SmartCAPEX AI - PDF Report Generator
+Retrosim - PDF Report Generator
 ====================================
 
 Generates professional PDF reports containing:
@@ -23,9 +23,9 @@ from matplotlib.patches import FancyBboxPatch
 import matplotlib.patches as mpatches
 
 
-class SmartCAPEXReportGenerator:
+class RetrosimReportGenerator:
     """
-    Professional PDF Report Generator for SmartCAPEX AI
+    Professional PDF Report Generator for Retrosim
     
     Features:
     - Multi-page PDF with cover page
@@ -37,7 +37,7 @@ class SmartCAPEXReportGenerator:
     """
     
     def __init__(self):
-        self.company_name = "SmartCAPEX AI"
+        self.company_name = "Retrosim"
         self.company_tagline = "Intelligent Maritime Investment Decision Support"
         
         # Color scheme (matching app theme)
@@ -82,7 +82,7 @@ class SmartCAPEXReportGenerator:
         if output_path is None:
             vessel_name = vessel_data.get('name', 'Vessel').replace('/', '_').replace(' ', '_')
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_path = f"SmartCAPEX_Report_{vessel_name}_{timestamp}.pdf"
+            output_path = f"Retrosim_Report_{vessel_name}_{timestamp}.pdf"
         
         # Ensure .pdf extension
         if not output_path.endswith('.pdf'):
@@ -131,7 +131,7 @@ class SmartCAPEXReportGenerator:
         ax.add_patch(bg_rect)
         
         # Company Logo/Title
-        ax.text(0.5, 0.85, "🚢 SmartCAPEX AI", 
+        ax.text(0.5, 0.85, "🚢 Retrosim", 
                 fontsize=32, fontweight='bold', 
                 ha='center', va='center',
                 color=self.colors['secondary'],
@@ -197,7 +197,7 @@ class SmartCAPEXReportGenerator:
                 transform=ax.transAxes)
         
         # Footer
-        ax.text(0.5, 0.02, "Powered by SmartCAPEX AI v2.0 | Multi-Agent Decision Support System", 
+        ax.text(0.5, 0.02, "Powered by Retrosim v2.0 | Multi-Agent Decision Support System", 
                 fontsize=8, ha='center',
                 color='#666',
                 transform=ax.transAxes)
@@ -407,7 +407,7 @@ class SmartCAPEXReportGenerator:
         
         # Info text
         ax.text(0.5, 0.75, 
-                "SmartCAPEX AI, geminiz için 3 farklı senaryo değerlendirmiştir:\n\n"
+                "Retrosim, geminiz için 3 farklı senaryo değerlendirmiştir:\n\n"
                 "1. DO-NOTHING: Mevcut durumda kalma\n"
                 "2. RETROFIT: Enerji verimliliği iyileştirmeleri\n"
                 "3. NEW BUILD: Yeni gemi inşası\n\n"
@@ -503,12 +503,12 @@ class SmartCAPEXReportGenerator:
         
         # Disclaimer
         ax.text(0.5, 0.10, 
-                "Bu rapor SmartCAPEX AI tarafından otomatik olarak oluşturulmuştur.\n"
+                "Bu rapor Retrosim tarafından otomatik olarak oluşturulmuştur.\n"
                 "Yatırım kararları vermeden önce uzman görüşü alınması tavsiye edilir.",
                 fontsize=8, ha='center', style='italic',
                 color='#666', transform=ax.transAxes)
         
-        ax.text(0.5, 0.03, f"© {datetime.now().year} SmartCAPEX AI - Tüm Hakları Saklıdır", 
+        ax.text(0.5, 0.03, f"© {datetime.now().year} Retrosim - Tüm Hakları Saklıdır", 
                 fontsize=8, ha='center', color='#444', transform=ax.transAxes)
         
         pdf.savefig(fig, facecolor=self.colors['bg_dark'])
@@ -530,7 +530,7 @@ class SmartCAPEXReportGenerator:
 # Quick test function
 def generate_sample_report():
     """Generate a sample report for testing"""
-    generator = SmartCAPEXReportGenerator()
+    generator = RetrosimReportGenerator()
     
     sample_vessel = {
         'name': 'M/V Test Vessel',

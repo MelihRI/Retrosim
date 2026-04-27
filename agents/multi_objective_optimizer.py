@@ -10,8 +10,8 @@ Based on:
 
 Purpose: Analyze retrofit scenarios using hybrid MCDM and MOO approach
 
-Integration with SmartCAPEX AI Agents:
-- Predictor Agent: Uses EANN for fuel consumption prediction
+Integration with Retrosim Agents:
+- Predictor Agent: Uses XGBoost for fuel consumption prediction
 - Investment Strategist: Provides NPV and DCF calculations
 - Climate Guardian: Supplies climate penalty projections
 - Asset Manager: Provides vessel data and parameters
@@ -392,21 +392,21 @@ class MultiObjectiveOptimizer:
     ÖĞRENİM: Hybrid Multi-Objective Optimizer
     
     Combines:
-    1. EANN for performance prediction (from surrogate_modeler.py)
+    1. XGBoost for performance prediction (from surrogate_modeler.py)
     2. TOPSIS for MCDM ranking
     3. IPSO for Pareto optimization
     
-    Integration with SmartCAPEX AI Agent Architecture:
-    - Communicates with Predictor Agent (EANN) for fuel predictions
+    Integration with Retrosim Agent Architecture:
+    - Communicates with Predictor Agent (XGBoost) for fuel predictions
     - Provides results to Investment Strategist for NPV calculations
     - Uses Climate Guardian's climate penalty factors
     """
     
     def __init__(self, surrogate_model=None):
         """
-        ÖĞRENİM: Integration with EANN
+        ÖĞRENİM: Integration with XGBoost
         
-        surrogate_model: Trained EANN model from surrogate_modeler.py
+        surrogate_model: Trained XGBoost model from surrogate_modeler.py
         """
         self.surrogate_model = surrogate_model
         self.scenarios = {}
@@ -450,12 +450,12 @@ class MultiObjectiveOptimizer:
         """
         ÖĞRENİM: Scenario generation
         
-        Integration with EANN Predictor Agent for accurate performance prediction
+        Integration with XGBoost Predictor Agent for accurate performance prediction
         """
         dwt = vessel_data.get('dwt', 5000)
         age = vessel_data.get('age', 15)
         
-        # Use EANN to predict current performance if model available
+        # Use XGBoost to predict current performance if model available
         if self.surrogate_model is not None:
             try:
                 current_prediction = self.surrogate_model.predict(vessel_data)
@@ -464,7 +464,7 @@ class MultiObjectiveOptimizer:
                 current_cii = current_prediction.get('cii_score', 4.2)
                 current_eedi = current_prediction.get('eedi_score', 18)
             except Exception as e:
-                print(f"Warning: EANN prediction failed: {e}. Using defaults.")
+                print(f"Warning: XGBoost prediction failed: {e}. Using defaults.")
                 current_fuel = vessel_data.get('fuel_consumption', 15)
                 current_co2 = vessel_data.get('co2_emission', 45)
                 current_cii = vessel_data.get('cii_score', 4.2)
@@ -1075,7 +1075,7 @@ class MultiObjectiveOptimizer:
             return
         
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('SmartCAPEX AI - Multi-Objective Optimization Results', 
+        fig.suptitle('Retrosim - Multi-Objective Optimization Results', 
                      fontsize=16, fontweight='bold')
         
         scenario_names = list(self.scenarios.keys())
@@ -1201,7 +1201,7 @@ class MultiObjectiveOptimizer:
 # Example usage and testing
 if __name__ == "__main__":
     print("="*70)
-    print("SmartCAPEX AI - Multi-Objective Optimizer")
+    print("Retrosim - Multi-Objective Optimizer")
     print("TOPSIS + IPSO Integration for Maritime Retrofit Decisions")
     print("="*70)
     

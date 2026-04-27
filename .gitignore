@@ -40,6 +40,9 @@ models/*.h5
 models/*.pkl
 models/*.onnx
 
+# Büyük Varlık Dosyaları
+assets/hulls/*.stl
+
 # Yapay Zeka Ajan Planları ve Artifacts
 task.md
 PROJECT_SUMMARY.md

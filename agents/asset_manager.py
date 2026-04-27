@@ -2,7 +2,7 @@
 Asset Manager - Vessel Data Validation & Intelligence Layer
 ============================================================
 
-Purpose (Per SmartCAPEX AI Architecture):
+Purpose (Per Retrosim Architecture):
 - "Kullanıcı ile sistem arasındaki köprü" - Bridge between user and agent system
 - Manage vessel data validation and preprocessing
 - Statistical regression for missing geometry data (L/B/T ratios)
@@ -12,7 +12,7 @@ Purpose (Per SmartCAPEX AI Architecture):
 
 Integration Points:
 - SettingsManager: Provides validation and auto-completion
-- Predictor Agent (EANN): Receives clean, validated vessel data
+- Predictor Agent (XGBoost): Receives clean, validated vessel data
 - Investment Strategist: Provides consistent data for NPV calculations
 """
 
@@ -42,9 +42,9 @@ class AssetManager:
     Asset Manager - "Varlık Yöneticisi" Agent
     ==========================================
     
-    Role in SmartCAPEX AI Architecture:
+    Role in Retrosim Architecture:
     - Acts as the bridge between USER and Agent System
-    - Validates vessel inputs before passing to Predictor Agent (EANN)
+    - Validates vessel inputs before passing to Predictor Agent (XGBoost)
     - Completes missing geometry data using statistical regression
     - Provides vessel templates for quick project setup
     - Manages data export/import for project persistence

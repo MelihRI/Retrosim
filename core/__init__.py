@@ -1,1 +1,1 @@
-# SmartCAPEX AI - Core Module
+# Retrosim - Core Module

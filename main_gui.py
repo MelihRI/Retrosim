@@ -38,7 +38,7 @@ try:
     # 3. GUI Dosyası Kontrolü
     print("3. gui/main_window.py dosyası aranıyor...")
     try:
-        from gui.main_window import SmartCAPEXMainWindow
+        from gui.main_window import RetrosimMainWindow
         print("   -> BAŞARILI: GUI dosyası import edildi.")
     except ImportError as e:
         print(f"   -> HATA: GUI dosyası bulunamadı veya içinde hata var. Detay: {e}")
@@ -52,7 +52,7 @@ try:
     app.setStyle("Fusion")
 
     print("5. Ana Pencere (Window) nesnesi üretiliyor...")
-    window = SmartCAPEXMainWindow()
+    window = RetrosimMainWindow()
     
     print("6. Pencere gösteriliyor (window.show)...")
     window.show()

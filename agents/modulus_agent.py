@@ -31,7 +31,7 @@ References:
   - Guo, M. et al. (2022). Physics-Informed Deep Learning for Ship Hydrodynamics.
   - Holtrop & Mennen (1982/1984). Ship Resistance.
 
-Author: SmartCAPEX AI Team
+Author: Retrosim Team
 """
 
 import os
@@ -467,136 +467,6 @@ class GCFNOLoss(nn.Module):
         }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Holtrop-Mennen Data Generator (Pre-Training)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class HoltropPreTrainer:
-    """
-    Generates physics-based pre-training data using the Holtrop-Mennen
-    method implemented in RetrosimHullAdapter.
-
-    Produces (point_cloud, conditions, scalar_labels) triplets by:
-      1. Sampling design vectors from Ship-D statistical bounds
-      2. Generating hull geometry → point cloud
-      3. Computing resistance via Holtrop-Mennen (1982/1984)
-
-    This provides ~10K low-fidelity but physically consistent samples
-    for pre-training the GC-FNO scalar head.
-    """
-
-    def __init__(self, num_points: int = 2048):
-        self.num_points = num_points
-
-    def generate_dataset(self, n_samples: int = 5000,
-                         speed_range: Tuple[float, float] = (8.0, 18.0),
-                         seed: int = 42) -> Dict[str, np.ndarray]:
-        """
-        Generate pre-training dataset from Holtrop-Mennen.
-
-        Returns:
-            Dict with:
-                'point_clouds': (N, num_points, 3)
-                'conditions':   (N, 7) = [V, Fn, Re_log, draft, trim, Cb, LB_ratio]
-                'scalars':      (N, 7) = [Cw, Cf, Ct, Rt, Rw, Rf, Pe]
-        """
-        from core.geometry.FFDHullMorpher import RetrosimHullAdapter, get_default_design_vector
-
-        np.random.seed(seed)
-
-        point_clouds = []
-        conditions_list = []
-        scalars_list = []
-
-        adapter = RetrosimHullAdapter()
-        attempts = 0
-        max_attempts = n_samples * 3
-
-        print(f"[*] Holtrop-Mennen pre-training verisi üretiliyor ({n_samples} örnek)...")
-
-        while len(point_clouds) < n_samples and attempts < max_attempts:
-            attempts += 1
-
-            try:
-                # Random design vector within Ship-D bounds
-                dv = get_default_design_vector()
-                dv['L'] = np.random.uniform(50.0, 300.0)
-                dv['B'] = dv['L'] / np.random.uniform(4.0, 8.0)
-                dv['T'] = dv['B'] / np.random.uniform(2.0, 4.0)
-                dv['D'] = dv['T'] + np.random.uniform(1.0, 5.0)
-                dv['Cb'] = np.random.uniform(0.45, 0.90)
-                dv['Cm'] = max(dv['Cb'] + 0.03, np.random.uniform(0.85, 0.99))
-                dv['Cwp'] = max(dv['Cb'], np.random.uniform(0.65, 0.95))
-                dv['LCB'] = np.random.uniform(46.0, 54.0)
-                dv['bow_angle'] = np.random.uniform(10.0, 45.0)
-                dv['stern_angle'] = np.random.uniform(15.0, 50.0)
-                dv['bulb_length'] = np.random.uniform(0.0, dv['L'] * 0.06)
-                dv['bulb_breadth'] = np.random.uniform(0.0, dv['B'] * 0.2)
-                dv['bulb_depth'] = np.random.uniform(0.0, dv['T'] * 0.4)
-                dv['stern_shape'] = np.random.uniform(0.0, 1.0)
-                dv['transom_beam'] = np.random.uniform(0.0, 0.6)
-
-                adapter.set_design_vector(dv)
-
-                # Generate point cloud (direct from B-spline)
-                pc = adapter.extract_point_cloud(
-                    num_points=self.num_points, method='parametric'
-                )
-
-                # Random speed
-                speed = np.random.uniform(*speed_range)
-
-                # Compute Holtrop-Mennen resistance
-                resistance = adapter.predict_total_resistance(speed)
-
-                if resistance['Rt'] <= 0 or np.isnan(resistance['Rt']):
-                    continue
-
-                # Operating conditions
-                V = speed * 0.5144  # m/s
-                Fn = resistance['Froude_number']
-                Re = resistance['Reynolds_number']
-                Re_log = np.log10(max(Re, 1e5))
-
-                conditions = np.array([
-                    V, Fn, Re_log, dv['T'], 0.0,  # trim = 0
-                    dv['Cb'], dv['L'] / dv['B']
-                ], dtype=np.float32)
-
-                # Scalar labels
-                scalars = np.array([
-                    resistance['Cw'],
-                    resistance['Cf'],
-                    resistance['Cw'] + resistance['Cf'],  # Ct
-                    resistance['Rt'],           # kN
-                    resistance['Rw'],           # kN
-                    resistance['Rf_form'],      # kN (with form factor)
-                    resistance['Pe_kW'],        # kW
-                ], dtype=np.float32)
-
-                point_clouds.append(pc)
-                conditions_list.append(conditions)
-                scalars_list.append(scalars)
-
-                if len(point_clouds) % 500 == 0:
-                    print(f"   ... {len(point_clouds)}/{n_samples} samples generated")
-
-            except Exception as e:
-                continue
-
-        if len(point_clouds) < 10:
-            raise RuntimeError(
-                f"Sadece {len(point_clouds)} geçerli örnek üretilebildi. "
-                "Design vector bounds'ları kontrol edin."
-            )
-
-        print(f"[OK] {len(point_clouds)} Holtrop-Mennen pre-training örnegi üretildi.")
-
-        return {
-            'point_clouds': np.array(point_clouds, dtype=np.float32),
-            'conditions':   np.array(conditions_list, dtype=np.float32),
-            'scalars':      np.array(scalars_list, dtype=np.float32),
-        }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -612,9 +482,8 @@ class ModulusCFDAgent(QObject):
     cloud encoding and predicts resistance + flow fields in ~0.02s.
 
     Training cascade:
-      1. Holtrop-Mennen pre-training (10K samples, ~2 min)
-      2. Ship-D fine-tuning (if available)
-      3. OpenFOAM fine-tuning (if datasets available)
+      1. OpenFOAM or Ship-D fine-tuning (primary, requires explicit dataset)
+      2. Mock tensor dataset (architecture testing only)
 
     Inference cascade:
       1. GC-FNO scalar prediction (~0.02s on GPU)
@@ -732,16 +601,10 @@ class ModulusCFDAgent(QObject):
         self.progress_signal.emit(5, "GC-FNO eğitim verisi hazırlanıyor...")
 
         if dataset is None:
-            try:
-                pretrainer = HoltropPreTrainer(num_points=self.NUM_POINTS)
-                dataset = pretrainer.generate_dataset(
-                    n_samples=min(2000, 5000),  # Start smaller for speed
-                    speed_range=(8.0, 18.0)
-                )
-            except Exception as e:
-                print(f"[!] Holtrop data generation failed: {e}")
-                print("   Falling back to synthetic data...")
-                dataset = self._generate_synthetic_dataset(n_samples=500)
+            print("[!] WARNING: No CFD dataset provided. "
+                  "Using mock tensors for network architecture testing only.")
+            self.progress_signal.emit(10, "⚠️ Mock veri üretiliyor (sadece mimari test)...")
+            dataset = self._generate_mock_dataset_for_testing(n_samples=200)
 
         pc_tensor = torch.tensor(dataset['point_clouds'], dtype=torch.float32)
         cond_tensor = torch.tensor(dataset['conditions'], dtype=torch.float32)
@@ -879,12 +742,19 @@ class ModulusCFDAgent(QObject):
         self.model.train(False)
         print(f"[OK] GC-FNO Training done! Best val loss: {best_val_loss:.6f}")
 
-    def _generate_synthetic_dataset(self, n_samples: int = 500) -> Dict:
+    def _generate_mock_dataset_for_testing(self, n_samples: int = 200) -> Dict:
         """
-        Fallback: Generate synthetic data if Holtrop-Mennen generation fails.
-        Uses random point clouds with analytical resistance formulas.
+        Generate mock dataset for GC-FNO architecture testing.
+
+        WARNING: This produces RANDOM tensors with no physical meaning.
+        Use ONLY for:
+          - Memory limit testing
+          - Loss function compilation verification
+          - CI/CD pipeline validation
+
+        For production training, provide OpenFOAM or Ship-D ground-truth data.
         """
-        print("[*] Generating synthetic GC-FNO fallback dataset...")
+        print("[*] Generating MOCK GC-FNO dataset (architecture testing only)...")
 
         point_clouds = np.random.randn(n_samples, self.NUM_POINTS, 3).astype(np.float32) * 0.3
 
@@ -902,7 +772,7 @@ class ModulusCFDAgent(QObject):
 
             conditions[i] = [V, Fn, np.log10(Re), T, 0.0, Cb, L / B]
 
-            # Simplified physics
+            # Simplified analytical formulas (not physically accurate)
             S = 1.7 * L * T + L * B * 0.85
             Cf = 0.075 / (np.log10(Re) - 2.0) ** 2
             Cw = 0.001 * Fn ** 3.5 * np.exp(-0.5 / (Fn + 1e-4))
@@ -1087,7 +957,7 @@ class ModulusCFDAgent(QObject):
     # ──────────────────────────────────────────────────────────────────────
 
     def multifidelity_predict(self, vessel_params: Dict,
-                              eann_agent=None, pinn_agent=None) -> Dict:
+                              tabular_agent=None, pinn_agent=None) -> Dict:
         """
         Multi-fidelity cascade: XGBoost → GC-FNO → [OpenFOAM].
 
@@ -1096,12 +966,12 @@ class ModulusCFDAgent(QObject):
         """
         results = {'fidelity_level': 'none'}
 
-        # Level 1: XGBoost / EANN (instant, ~0.01s)
-        if eann_agent and hasattr(eann_agent, 'predict'):
+        # Level 1: XGBoost (instant, ~0.01s)
+        if tabular_agent and hasattr(tabular_agent, 'predict'):
             try:
-                eann_pred = eann_agent.predict(vessel_params, model_type='eann')
-                results.update(eann_pred)
-                results['fidelity_level'] = 'XGBoost/EANN'
+                xgb_pred = tabular_agent.predict(vessel_params, model_type='auto')
+                results.update(xgb_pred)
+                results['fidelity_level'] = 'XGBoost'
             except Exception:
                 pass
 

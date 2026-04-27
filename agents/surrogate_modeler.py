@@ -1,16 +1,16 @@
 """
-Surrogate Modeler (XGBoost + GC-FNO) — PyQt6 Integrated
-========================================================
-Primary model: XGBoost / GradientBoosting for tabular vessel + env features.
-Secondary: GC-FNO resistance coefficients as additional features.
-Legacy: EANN (Emotional ANN) kept for backward compatibility / A-B testing.
+Surrogate Modeler (XGBoost + Kriging + GC-FNO) — PyQt6 Integrated
+=================================================================
+Primary model: XGBoost for tabular vessel + environmental features.
+Secondary: GC-FNO resistance coefficients as additional geometry-conditioned features.
+Fallback: GradientBoosting (sklearn) when XGBoost is not installed.
+Optional: Kriging (SMT) for uncertainty quantification.
 
-Why XGBoost over EANN:
+Why XGBoost:
   - Tabular data benchmarks consistently favor tree-based methods
     (Grinsztajn et al., 2022; Shwartz-Ziv & Armon, 2022)
   - Built-in feature importance → interpretable for naval architects
   - 20× faster training, fewer hyperparameters
-  - EANN's "hormonal" metaphor adds no physics insight
 """
 
 import numpy as np
@@ -47,23 +47,17 @@ try:
 except ImportError:
     HAS_XGBOOST = False
 
-# PyTorch Imports (for legacy EANN)
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
-
-# PyQt6 Imports (ARAYÜZ İÇİN GEREKLİ KISIM)
+# PyQt6 Imports
 from PyQt6.QtCore import QObject, pyqtSignal
 
 # Sklearn Imports
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.metrics import r2_score, mean_absolute_error
 
-# SMT Imports (Kriging)
+# SMT Imports (Kriging — uncertainty quantification)
 try:
     from smt.surrogate_models import KRG
     SMT_AVAILABLE = True
@@ -71,165 +65,7 @@ except ImportError:
     SMT_AVAILABLE = False
 
 
-# --- Determine the best available device ---
-def _get_device():
-    if torch.cuda.is_available():
-        return torch.device('cuda')
-    try:
-        if torch.backends.mps.is_available():
-            return torch.device('mps')
-    except AttributeError:
-        pass
-    return torch.device('cpu')
 
-DEVICE = _get_device()
-
-
-# ============================================================
-# Physics-Informed Loss Function
-# ============================================================
-class PhysicsInformedLoss(nn.Module):
-    def __init__(self, lambda_physics=0.1):
-        super().__init__()
-        self.mse = nn.SmoothL1Loss()  # Huber Loss for robust gradients
-        self.lambda_physics = lambda_physics
-
-    def forward(self, y_pred, y_true, physics_penalty):
-        # Loss = MSE(Cw_pred, Cw_true) + λ * Physics_Penalty
-        return self.mse(y_pred, y_true) + self.lambda_physics * torch.mean(physics_penalty)
-
-# ============================================================
-# PyTorch EANN Model (nn.Module)
-# ============================================================
-class EmotionalANN(nn.Module):
-    """
-    Emotional Artificial Neural Network with Hormonal Modulation (Ha, Hb, Hc).
-    Scientific Basis: Aljahdali et al. (2025)
-
-    Ha (Anxiety): High wave/wind stress
-    Hb (Confidence): Steady state efficiency
-    Hc (Stress): Engine load / total resistance stress
-    """
-
-    def __init__(self, n_features: int, n_targets: int,
-                 vessel_indices: List[int], env_indices: List[int]):
-        super().__init__()
-        self.vessel_indices = vessel_indices
-        self.env_indices = env_indices
-        n_vessel = len(vessel_indices)
-        n_env = len(env_indices)
-
-        # --- HORMONAL ENGINE (Ha, Hb, Hc) ---
-        self.ha_layer = nn.Sequential(nn.Linear(n_env, 1), nn.Sigmoid())       # Anxiety
-        self.hb_layer = nn.Sequential(nn.Linear(n_env, 1), nn.Sigmoid())       # Confidence
-        self.hc_layer = nn.Sequential(nn.Linear(n_features, 1), nn.Sigmoid())  # Stress
-
-        # --- PRIMARY PATHWAY (Vessel) ---
-        self.vessel_bn = nn.BatchNorm1d(n_vessel)
-        self.vessel_fc1 = nn.Linear(n_vessel, 128)
-        self.vessel_fc2 = nn.Linear(128, 64)
-
-        # --- SECONDARY PATHWAY (Environmental) ---
-        self.env_bn = nn.BatchNorm1d(n_env)
-        self.env_fc1 = nn.Linear(n_env, 64)
-
-        # --- EMOTIONAL MODULATION ---
-        self.modulator = nn.Linear(3, 64)  # 3 hormones -> 64
-
-        # --- ATTENTION FUSION ---
-        self.attn_v = nn.Linear(64, 64)
-        self.attn_e = nn.Linear(64, 64)
-        self.attn_gate = nn.Linear(128, 1)  # concat -> scalar gate
-
-        # --- FUSION HEAD ---
-        self.fusion_fc = nn.Linear(128, 128)
-
-        # --- GLOBAL HORMONAL GAIN ---
-        self.gain_layer = nn.Sequential(nn.Linear(3, 1), nn.Softplus())
-
-        # --- OUTPUT ---
-        self.output_layer = nn.Linear(128, n_targets)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Split features
-        vessel_feats = x[:, self.vessel_indices]
-        env_feats = x[:, self.env_indices]
-
-        # Hormones
-        ha = self.ha_layer(env_feats)                   # (B, 1)
-        hb = self.hb_layer(1.0 - env_feats)             # (B, 1)
-        hc = self.hc_layer(x)                            # (B, 1)
-        hormones = torch.cat([ha, hb, hc], dim=1)       # (B, 3)
-
-        # Vessel pathway
-        v = self.vessel_bn(vessel_feats)
-        v = torch.relu(self.vessel_fc1(v))
-        v = torch.relu(self.vessel_fc2(v))               # (B, 64)
-
-        # Environmental pathway
-        e = self.env_bn(env_feats)
-        e1 = torch.relu(self.env_fc1(e))                 # (B, 64)
-
-        # Emotional modulation
-        mod = torch.tanh(self.modulator(hormones))       # (B, 64)
-        e_mod = e1 * mod                                 # (B, 64)
-
-        # Attention
-        att_v = torch.tanh(self.attn_v(v))               # (B, 64)
-        att_e = torch.tanh(self.attn_e(e_mod))           # (B, 64)
-        concat = torch.cat([att_v, att_e], dim=1)        # (B, 128)
-        gate = torch.sigmoid(self.attn_gate(concat))     # (B, 1)
-
-        v_w = v * gate
-        e_w = e_mod * (1.0 - gate)
-
-        fusion = torch.cat([v_w, e_w], dim=1)            # (B, 128)
-        fusion = torch.relu(self.fusion_fc(fusion))       # (B, 128)
-
-        # Global hormonal gain
-        gain = self.gain_layer(hormones)                  # (B, 1)
-        fusion = fusion * gain                            # (B, 128)
-
-        return self.output_layer(fusion)                  # (B, n_targets)
-
-
-# ============================================================
-# Emotional Learning Rate Scheduler (PyTorch)
-# ============================================================
-class EmotionalLRScheduler:
-    """
-    Adjusts learning rate based on Anxiety and Confidence parameters.
-    Wraps a PyTorch optimizer.
-    """
-    def __init__(self, optimizer: optim.Optimizer,
-                 start_lr: float = 0.001,
-                 anxiety: float = 0.1,
-                 confidence: float = 0.1):
-        self.optimizer = optimizer
-        self.start_lr = start_lr
-        self.anxiety = anxiety
-        self.confidence = confidence
-        self.best_loss = float('inf')
-
-        # Set initial LR
-        for pg in self.optimizer.param_groups:
-            pg['lr'] = self.start_lr
-
-    def step(self, val_loss: float):
-        """Call at end of each epoch with validation loss."""
-        if val_loss < self.best_loss:
-            self.best_loss = val_loss
-            self.confidence = min(0.5, self.confidence + 0.02)
-            self.anxiety = max(0.01, self.anxiety - 0.01)
-            factor = 1.0 + (self.confidence * 0.1)
-        else:
-            self.anxiety = min(0.9, self.anxiety + 0.05)
-            self.confidence = max(0.0, self.confidence - 0.05)
-            factor = 1.0 - (self.anxiety * 0.2)
-
-        for pg in self.optimizer.param_groups:
-            old_lr = pg['lr']
-            pg['lr'] = max(1e-6, min(old_lr * factor, 0.01))
 
 
 # ============================================================
@@ -237,7 +73,10 @@ class EmotionalLRScheduler:
 # ============================================================
 class SurrogateModeler(QObject):
     """
-    Physics-Informed Surrogate Model — PyTorch Backend
+    Tabular Surrogate Model — XGBoost / Kriging / GBR
+
+    Predicts operational targets (fuel consumption, CO2, CII, EEDI) from
+    vessel parameters and environmental conditions.
     """
     # SİNYALLER (GUI BUNLARI DİNLEYECEK)
     progress_signal = pyqtSignal(int, str)   # (Yüzde, Mesaj)
@@ -383,18 +222,7 @@ class SurrogateModeler(QObject):
         self.progress_signal.emit(10, f"Ship-D verisi yüklendi: {len(df)} kayıt")
         return df
 
-    # ----------------------------------------------------------
-    # Model Building
-    # ----------------------------------------------------------
-    def build_emotional_ann_torch(self) -> EmotionalANN:
-        """Constructs PyTorch-based EANN with hormonal modulation."""
-        model = EmotionalANN(
-            n_features=len(self.feature_names),
-            n_targets=len(self.target_names),
-            vessel_indices=self.vessel_indices,
-            env_indices=self.env_indices
-        )
-        return model.to(DEVICE)
+
 
     # ----------------------------------------------------------
     # Drift Detection
@@ -431,7 +259,7 @@ class SurrogateModeler(QObject):
     def train_models(self, config: Dict = None):
         """
         Train surrogate models. Primary: XGBoost/GradientBoosting.
-        Legacy EANN is trained optionally for A/B comparison.
+        Optional Kriging (SMT) for uncertainty quantification.
 
         config: Parameters from GUI (epochs, lr, model type, etc.)
         """
@@ -549,15 +377,7 @@ class SurrogateModeler(QObject):
                 scores['gbr_r2'] = float(r2_score(
                     y_test_s, gbr_preds, multioutput='uniform_average'))
 
-            # === 2. LEGACY EANN (optional, for A/B comparison) ===
-            if 'EANN' in model_type or config.get('train_eann', False):
-                self.progress_signal.emit(60, "Legacy EANN eğitiliyor (A/B karşılaştırma)...")
-                self._train_legacy_eann(
-                    X_train_s, y_train_s, X_val_s, y_val_s,
-                    X_test_s, y_test_s, epochs, lr, config, scores
-                )
-
-            # === 3. KRIGING (SMT) ===
+            # === 2. KRIGING (SMT — uncertainty quantification) ===
             if SMT_AVAILABLE and 'Kriging' in model_type:
                 self.progress_signal.emit(70, "Kriging Matrisleri Hesaplanıyor (SMT)...")
                 self.models['kriging'] = []
@@ -572,14 +392,7 @@ class SurrogateModeler(QObject):
                     krg.train()
                     self.models['kriging'].append(krg)
 
-            # === 4. BASELINE (RF) ===
-            self.progress_signal.emit(90, "Random Forest Baseline eğitiliyor...")
-            self.models['rf'] = MultiOutputRegressor(
-                RandomForestRegressor(n_estimators=50, n_jobs=-1))
-            self.models['rf'].fit(X_train_s, y_train_s)
-
             self.is_trained = True
-            scores['rf_r2'] = self.models['rf'].score(X_test_s, y_test_s)
 
             # Save primary model
             self._save_primary_model()
@@ -592,85 +405,7 @@ class SurrogateModeler(QObject):
             import traceback
             traceback.print_exc()
 
-    def _train_legacy_eann(self, X_train_s, y_train_s, X_val_s, y_val_s,
-                            X_test_s, y_test_s, epochs, lr, config, scores):
-        """Train legacy EANN for A/B comparison. Does not affect primary model."""
-        try:
-            anxiety = float(config.get('anxiety', 0.1))
-            confidence = float(config.get('confidence', 0.1))
 
-            model = self.build_emotional_ann_torch()
-            self.models['eann'] = model
-
-            criterion = PhysicsInformedLoss(lambda_physics=0.15)
-            optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
-            scheduler = EmotionalLRScheduler(optimizer, start_lr=lr,
-                                             anxiety=anxiety, confidence=confidence)
-
-            train_ds = TensorDataset(
-                torch.tensor(X_train_s, dtype=torch.float32),
-                torch.tensor(y_train_s, dtype=torch.float32))
-            val_ds = TensorDataset(
-                torch.tensor(X_val_s, dtype=torch.float32),
-                torch.tensor(y_val_s, dtype=torch.float32))
-
-            train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
-            val_loader = DataLoader(val_ds, batch_size=256, shuffle=False)
-
-            best_val_loss = float('inf')
-            patience_counter = 0
-            best_state_dict = None
-
-            for epoch in range(epochs):
-                model.train()
-                epoch_loss = 0.0
-                for xb, yb in train_loader:
-                    xb, yb = xb.to(DEVICE), yb.to(DEVICE)
-                    optimizer.zero_grad()
-                    pred = model(xb)
-                    physics_penalty = torch.relu(pred[:, 0] - xb[:, 0] * 1.5) ** 2
-                    loss = criterion(pred, yb, physics_penalty)
-                    loss.backward()
-                    optimizer.step()
-                    epoch_loss += loss.item() * xb.size(0)
-                epoch_loss /= len(train_ds)
-
-                model.train(False)
-                val_loss = 0.0
-                with torch.no_grad():
-                    for xb, yb in val_loader:
-                        xb, yb = xb.to(DEVICE), yb.to(DEVICE)
-                        pred = model(xb)
-                        physics_p = torch.zeros_like(pred[:, 0])
-                        val_loss += criterion(pred, yb, physics_p).item() * xb.size(0)
-                val_loss /= len(val_ds)
-
-                scheduler.step(val_loss)
-
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                    best_state_dict = {k: v.clone() for k, v in model.state_dict().items()}
-                else:
-                    patience_counter += 1
-                    if patience_counter >= 15:
-                        break
-
-            if best_state_dict is not None:
-                model.load_state_dict(best_state_dict)
-
-            self._save_eann_model(model)
-
-            model.train(False)
-            X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to(DEVICE)
-            y_test_t = torch.tensor(y_test_s, dtype=torch.float32).to(DEVICE)
-            with torch.no_grad():
-                test_pred = model(X_test_t)
-                physics_p = torch.zeros_like(test_pred[:, 0])
-                scores['eann_loss'] = float(criterion(test_pred, y_test_t, physics_p).item())
-
-        except Exception as e:
-            print(f"[!] Legacy EANN training failed: {e}")
 
     # ----------------------------------------------------------
     # Model Save / Load
@@ -697,39 +432,7 @@ class SurrogateModeler(QObject):
         scaler_path = os.path.join(self.MODEL_DIR, f"{self.vessel_id}_scalers.joblib")
         joblib.dump(self.scalers, scaler_path)
 
-    def _save_eann_model(self, model: nn.Module):
-        """Save legacy EANN model weights as .pt file."""
-        os.makedirs(self.MODEL_DIR, exist_ok=True)
-        path = os.path.join(self.MODEL_DIR, f"{self.vessel_id}_eann_model.pt")
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'vessel_indices': self.vessel_indices,
-            'env_indices': self.env_indices,
-            'n_features': len(self.feature_names),
-            'n_targets': len(self.target_names),
-        }, path)
-        print(f"[S] EANN model kaydedildi: {path}")
 
-    def _load_eann_model(self) -> Optional[EmotionalANN]:
-        """Load legacy EANN model weights from .pt file."""
-        path = os.path.join(self.MODEL_DIR, f"{self.vessel_id}_eann_model.pt")
-        if not os.path.exists(path):
-            return None
-        try:
-            ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
-            model = EmotionalANN(
-                n_features=ckpt['n_features'],
-                n_targets=ckpt['n_targets'],
-                vessel_indices=ckpt['vessel_indices'],
-                env_indices=ckpt['env_indices']
-            ).to(DEVICE)
-            model.load_state_dict(ckpt['model_state_dict'])
-            model.train(False)
-            print(f"[OK] EANN model yüklendi: {path}")
-            return model
-        except Exception as e:
-            print(f"[!] EANN model yüklenemedi: {e}")
-            return None
 
     # ----------------------------------------------------------
     # Predict
@@ -738,7 +441,7 @@ class SurrogateModeler(QObject):
         """
         Predict operational targets using the best available model.
 
-        Model priority: XGBoost > GBR > EANN > RF (fallback)
+        Model priority: XGBoost > GBR > Kriging (fallback)
         """
         if not self.is_trained:
             return {t: 0.0 for t in self.target_names}
@@ -764,7 +467,7 @@ class SurrogateModeler(QObject):
 
         # Auto model selection (best available)
         if model_type == 'auto':
-            primary = self.models.get('primary', 'rf')
+            primary = self.models.get('primary', 'gbr')
         else:
             primary = model_type.lower()
 
@@ -774,20 +477,19 @@ class SurrogateModeler(QObject):
             ])
         elif primary == 'gbr' and 'gbr' in self.models:
             y_pred_s = self.models['gbr'].predict(X_scaled)
-        elif ('eann' in primary or 'EANN' in model_type) and 'eann' in self.models:
-            model = self.models['eann']
-            model.train(False)
-            X_t = torch.tensor(X_scaled, dtype=torch.float32).to(DEVICE)
-            with torch.no_grad():
-                y_pred_s = model(X_t).cpu().numpy()
-        elif 'Kriging' in model_type and SMT_AVAILABLE and 'kriging' in self.models:
+        elif ('kriging' in primary or 'Kriging' in model_type) and SMT_AVAILABLE and 'kriging' in self.models:
             preds = []
             for krg in self.models['kriging']:
                 preds.append(krg.predict_values(X_scaled)[0, 0])
             y_pred_s = np.array([preds])
         else:
-            # Fallback to RF
-            y_pred_s = self.models['rf'].predict(X_scaled)
+            # Fallback: use whatever primary model is available
+            if 'xgboost' in self.models:
+                y_pred_s = np.column_stack([m.predict(X_scaled) for m in self.models['xgboost']])
+            elif 'gbr' in self.models:
+                y_pred_s = self.models['gbr'].predict(X_scaled)
+            else:
+                return {t: 0.0 for t in self.target_names}
 
         y_pred = self.scalers['targets'].inverse_transform(y_pred_s)
 

@@ -74,8 +74,8 @@ class SmartModel(QStandardItemModel):
 
     def setup_initial_structure(self):
         """Builds the default tree hierarchy."""
-        # Root: SmartCAPEX Project
-        self.project_node = SmartNodeItem("SmartCAPEX Project", NodeType.PROJECT)
+        # Root: Retrosim Project
+        self.project_node = SmartNodeItem("Retrosim Project", NodeType.PROJECT)
         self.root_item.appendRow(self.project_node)
 
         # 1. Global Definitions
